@@ -27,8 +27,9 @@ def build_clickhouse_mcp_toolset():
 
     try:
         from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
+        from google.adk.tools.mcp_tool.mcp_session_manager import StdioConnectionParams
         from mcp import StdioServerParameters
-    except Exception as exc:  # ADK/mcp not installed yet
+    except Exception as exc:  # ADK/mcp not installed or incompatible
         print(f"[clickhouse-mcp] toolset unavailable ({exc}); using function tools")
         return None
 
@@ -43,10 +44,12 @@ def build_clickhouse_mcp_toolset():
     }
     try:
         return MCPToolset(
-            connection_params=StdioServerParameters(
-                command="uvx",
-                args=["mcp-clickhouse"],
-                env={**os.environ, **server_env},
+            connection_params=StdioConnectionParams(
+                server_params=StdioServerParameters(
+                    command="uvx",
+                    args=["mcp-clickhouse"],
+                    env={**os.environ, **server_env},
+                ),
             )
         )
     except Exception as exc:

@@ -5,6 +5,9 @@ google-genai>=1.0.0
 # --- ClickHouse (partner) ---
 clickhouse-connect>=0.8.0
 
+# --- MCP (ADK <-> mcp-clickhouse server). Pin <2: ADK 2.8.0 expects the 1.x layout ---
+mcp>=1.8,<2
+
 # --- API server ---
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
