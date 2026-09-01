@@ -1,0 +1,17 @@
+# --- Google ADK / Gemini / Vertex AI ---
+google-cloud-aiplatform[agent_engines,adk]>=1.101.0
+google-genai>=1.0.0
+
+# --- ClickHouse (partner) ---
+clickhouse-connect>=0.8.0
+
+# --- API server ---
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+
+# --- Media / utilities ---
+pillow>=10.3.0
+python-dotenv>=1.0.1

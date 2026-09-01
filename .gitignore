@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Secrets / credentials
+.env
+*.key
+service-account*.json
+gcp-key.json
+
+# Node / web
+web/node_modules/
+web/dist/
+web/.vite/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Runtime / data
+sample_assets/**/*.mp4
+sample_assets/**/*.mov
+*.log
+.cache/
+organized/
