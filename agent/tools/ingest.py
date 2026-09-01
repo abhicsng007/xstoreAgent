@@ -27,6 +27,10 @@ def ingest_folder(root: str, project: str = "", limit: int | None = None) -> dic
         Summary dict: files scanned, rows inserted, and the per-type roll-up.
     """
     assets = scan_folder(root, compute_hash=True)
+    # Skip empty files (0-byte placeholders / broken exports) — nothing to caption
+    # or embed, and they only add noise to the catalog.
+    skipped = [a for a in assets if a.size_bytes == 0]
+    assets = [a for a in assets if a.size_bytes > 0]
     if limit:
         assets = assets[:limit]
 
@@ -56,6 +60,7 @@ def ingest_folder(root: str, project: str = "", limit: int | None = None) -> dic
         "root": root,
         "project": project,
         "scanned": len(assets),
+        "skipped_empty": len(skipped),
         "inserted": inserted,
         "summary": summarize(assets),
     }

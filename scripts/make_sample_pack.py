@@ -1,0 +1,106 @@
+"""Generate a small pack of REAL images so the pipeline (Gemini captioning +
+multimodal embeddings) has genuine pixels to work on. Not stock footage — just
+enough distinct, labeled imagery to demo classification, embedding, cross-modal
+repurpose search, and duplicate/stale detection.
+
+    python scripts/make_sample_pack.py
+
+Overwrites the raster images under sample_assets/. Video/audio placeholders are
+left as-is (embedding skips unreadable media gracefully).
+"""
+from __future__ import annotations
+
+import os
+
+from PIL import Image, ImageDraw
+
+ROOT = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sample_assets")
+
+
+def _canvas(size, top, bottom):
+    """Vertical gradient canvas from `top` to `bottom` RGB."""
+    w, h = size
+    img = Image.new("RGB", size)
+    px = img.load()
+    for y in range(h):
+        t = y / max(1, h - 1)
+        px_row = tuple(int(top[i] + (bottom[i] - top[i]) * t) for i in range(3))
+        for x in range(w):
+            px[x, y] = px_row
+    return img
+
+
+def _label(img, text, xy=(24, 24), fill=(255, 255, 255)):
+    ImageDraw.Draw(img).text(xy, text, fill=fill)
+    return img
+
+
+def save(path, img):
+    full = os.path.join(ROOT, path)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    img.save(full)
+    print("  wrote", path)
+
+
+def main():
+    # City skyline b-roll still (reusable) + an exact duplicate for dedup.
+    city = _canvas((640, 400), (30, 60, 120), (10, 20, 45))
+    d = ImageDraw.Draw(city)
+    for i, x in enumerate(range(40, 600, 70)):
+        d.rectangle([x, 180 + (i % 3) * 20, x + 45, 360], fill=(200, 210, 235))
+    _label(city, "CITY SKYLINE - dusk b-roll")
+    save("images/city_skyline.png", city)
+    save("images/city_skyline_dup.png", city.copy())  # exact duplicate
+
+    # Sunset beach (reusable stock).
+    sunset = _canvas((640, 400), (255, 170, 60), (120, 40, 90))
+    _label(sunset, "SUNSET BEACH - warm stock", fill=(40, 20, 10))
+    save("images/sunset_beach.jpg", sunset.convert("RGB"))
+
+    # Forest / nature b-roll (reusable).
+    forest = _canvas((640, 400), (40, 120, 60), (10, 40, 20))
+    _label(forest, "FOREST - nature b-roll")
+    save("images/forest_nature.png", forest)
+
+    # Brand logo (reusable vector-like raster) + app icon.
+    logo = Image.new("RGB", (500, 300), (245, 245, 245))
+    ImageDraw.Draw(logo).ellipse([180, 90, 320, 230], fill=(230, 90, 60))
+    _label(logo, "ACME logo", xy=(200, 250), fill=(30, 30, 30))
+    save("brand/logo_primary.png", logo)
+
+    icon = Image.new("RGB", (128, 128), (60, 120, 240))
+    ImageDraw.Draw(icon).rounded_rectangle([24, 24, 104, 104], radius=18, fill=(255, 255, 255))
+    save("brand/app_icon.png", icon)
+
+    # Clapper/slate frame -> should be judged STALE / project-specific.
+    slate = Image.new("RGB", (640, 400), (20, 20, 20))
+    ds = ImageDraw.Draw(slate)
+    ds.rectangle([40, 40, 600, 360], outline=(255, 255, 255), width=4)
+    _label(slate, "SCENE 12  TAKE 3  ROLL A  -- clapperboard slate", xy=(70, 190))
+    save("images/scene12_take3_slate.png", slate)
+
+    # Placeholder video/audio/vector files. These are NOT real media — for the
+    # final demo video, drop real footage/audio in here. The pipeline captions
+    # them from their filenames and embeds that text, so they still participate in
+    # search. A few bytes so they aren't skipped as empty.
+    placeholders = {
+        "video/city_broll_01.mp4": "placeholder city skyline b-roll clip",
+        "video/city_broll_01_copy.mp4": "placeholder city skyline b-roll clip",  # dup name
+        "video/project_rough_cut_v3.mov": "placeholder project rough cut version 3",
+        "audio/ambient_city.mp3": "placeholder ambient city street tone bed",
+        "audio/whoosh_sfx.wav": "placeholder whoosh transition sound effect",
+        "brand/logo_primary.svg": "<svg xmlns='http://www.w3.org/2000/svg'/>",
+        "notes.txt": "Shot list and licensing notes for the campaign.",
+    }
+    for rel, text in placeholders.items():
+        full = os.path.join(ROOT, rel)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        print("  wrote", rel)
+
+    print("Sample pack ready in", ROOT)
+
+
+if __name__ == "__main__":
+    main()

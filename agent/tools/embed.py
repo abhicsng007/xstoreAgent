@@ -26,7 +26,8 @@ def _model():
     from vertexai.vision_models import MultiModalEmbeddingModel
 
     s = get_settings()
-    vertexai.init(project=s.gcp_project, location=s.gcp_location)
+    # Regional endpoint — multimodalembedding@001 is not served from "global".
+    vertexai.init(project=s.gcp_project, location=s.embedding_location)
     return MultiModalEmbeddingModel.from_pretrained(s.mm_embedding_model)
 
 
@@ -68,21 +69,22 @@ def embed_video(path: str, contextual_text: str = "") -> list[float]:
 
 
 def embed_asset(asset_type: str, path: str, caption: str = "") -> list[float]:
-    """Route an asset to the right embedding call based on its type.
+    """Embed an asset's Gemini caption for search.
 
-    All routes land in the same 1408-d space:
-      - image / icon / vector  -> image embedding (+ caption as context)
-      - video                  -> first-segment video embedding
-      - audio / document / other -> text embedding of the caption
+    We embed the *caption text* (not raw pixels) uniformly for every asset type.
+    Gemini's vision already looked at the asset and wrote a rich caption, so the
+    caption carries the visual meaning into text. Embedding captions keeps every
+    asset in ONE consistent text region of the space, avoiding the multimodal
+    "modality gap" where a text brief unfairly favours text-caption assets over
+    image-embedding assets. Result: a text brief retrieves the right video, image,
+    audio or vector by meaning, ranked intuitively.
 
-    Returns [] if embedding is unavailable (e.g. an unreadable file); the caller
-    stores the row anyway so metadata search still works.
+    (embed_image / embed_video remain available for visual-similarity dedup.)
+
+    Returns [] if embedding is unavailable; the caller stores the row anyway so
+    metadata/type filters still work.
     """
     try:
-        if asset_type in ("image", "icon", "vector"):
-            return embed_image(path, contextual_text=caption)
-        if asset_type == "video":
-            return embed_video(path, contextual_text=caption)
         return embed_text(caption or asset_type)
     except Exception as exc:  # keep ingestion resilient to one bad file
         print(f"[embed] skipped {path}: {exc}")

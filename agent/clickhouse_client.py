@@ -7,6 +7,7 @@ near-duplicate detection.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 import clickhouse_connect
@@ -14,13 +15,28 @@ from clickhouse_connect.driver.client import Client
 
 from .config import get_settings
 
+
+def _as_datetime(value: Any) -> datetime:
+    """Coerce a created_at value (str from scan.py, or datetime) to datetime, which
+    is what clickhouse-connect requires for a DateTime column."""
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            pass
+    return datetime.now()
+
 _ASSETS_COLUMNS = [
     "path", "filename", "asset_type", "ext", "size_bytes", "created_at",
     "project", "caption", "tags", "reusable", "status", "content_hash", "embedding",
 ]
 
 
-def get_client() -> Client:
+def get_client(database: str | None = None) -> Client:
+    """Connect to ClickHouse. Pass database='default' to connect before our own
+    database exists (used by ensure_schema); otherwise the configured database."""
     s = get_settings()
     return clickhouse_connect.get_client(
         host=s.ch_host,
@@ -28,14 +44,18 @@ def get_client() -> Client:
         username=s.ch_user,
         password=s.ch_password,
         secure=s.ch_secure,
-        database=s.ch_database,
+        database=database if database is not None else s.ch_database,
     )
 
 
 def ensure_schema(client: Client | None = None) -> None:
-    """Create database + assets table if absent. Idempotent (see agent/schema.sql)."""
+    """Create database + assets table if absent. Idempotent (see agent/schema.sql).
+
+    Connects to the always-present `default` database first, since our target
+    database may not exist yet on a fresh instance.
+    """
     s = get_settings()
-    client = client or get_client()
+    client = client or get_client(database="default")
     client.command(f"CREATE DATABASE IF NOT EXISTS {s.ch_database}")
     client.command(
         f"""
@@ -71,7 +91,7 @@ def insert_assets(rows: list[dict[str, Any]], client: Client | None = None) -> i
             r.get("asset_type", "other"),
             r.get("ext", ""),
             int(r.get("size_bytes", 0)),
-            r.get("created_at"),
+            _as_datetime(r.get("created_at")),
             r.get("project", ""),
             r.get("caption", ""),
             list(r.get("tags", [])),
@@ -115,36 +135,68 @@ def repurpose_search(
 def find_duplicates(
     threshold: float | None = None, client: Client | None = None
 ) -> list[dict[str, Any]]:
-    """Find near-duplicate asset pairs within the same type.
+    """Find duplicate asset pairs (exact + near) so the user can reclaim storage.
 
-    Exact duplicates (same content_hash) are always returned; embedding pairs with
-    cosineDistance below `threshold` are returned as likely-dup candidates. The
-    agent proposes archiving the newer/lower-value member; a human approves.
+    Two independent passes, merged and de-duped:
+      1. Exact duplicates — assets sharing a content_hash (works for any type,
+         including media we couldn't embed). Distance reported as 0.
+      2. Near-duplicates — same-type pairs whose embeddings are within `threshold`
+         cosine distance. Only assets that actually embedded participate (via the
+         `embedded` CTE), so cosineDistance never sees mismatched array sizes.
+
+    The agent proposes archiving one member of each pair; a human approves.
     """
     client = client or get_client()
     thr = threshold if threshold is not None else get_settings().dup_distance_threshold
-    result = client.query(
+
+    # Pass 1: exact content-hash duplicates.
+    exact = client.query(
         """
         SELECT a.id AS id_a, a.filename AS file_a,
                b.id AS id_b, b.filename AS file_b,
-               a.asset_type AS asset_type,
-               if(a.content_hash = b.content_hash AND a.content_hash != '', 0,
-                  cosineDistance(a.embedding, b.embedding)) AS distance
+               a.asset_type AS asset_type, 0.0 AS distance
         FROM assets AS a
         CROSS JOIN assets AS b
-        WHERE a.id < b.id
-          AND a.asset_type = b.asset_type
+        WHERE a.id < b.id AND a.content_hash = b.content_hash
+          AND a.content_hash != ''
           AND a.status != 'archived' AND b.status != 'archived'
-          AND (
-                (a.content_hash = b.content_hash AND a.content_hash != '')
-             OR (length(a.embedding) > 0 AND length(b.embedding) > 0
-                 AND cosineDistance(a.embedding, b.embedding) < {thr:Float64})
-          )
+        """
+    )
+
+    # Pass 2: near-duplicate embeddings (all rows here have length == EMBED_DIM).
+    near = client.query(
+        """
+        WITH embedded AS (
+            SELECT id, filename, asset_type, embedding
+            FROM assets
+            WHERE status != 'archived' AND length(embedding) > 0
+        )
+        SELECT a.id AS id_a, a.filename AS file_a,
+               b.id AS id_b, b.filename AS file_b,
+               a.asset_type AS asset_type,
+               cosineDistance(a.embedding, b.embedding) AS distance
+        FROM embedded AS a
+        CROSS JOIN embedded AS b
+        WHERE a.id < b.id AND a.asset_type = b.asset_type
+          AND length(a.embedding) = length(b.embedding)
+          AND cosineDistance(a.embedding, b.embedding) < {thr:Float64}
         ORDER BY distance ASC
         """,
         parameters={"thr": thr},
     )
-    return [dict(zip(result.column_names, row)) for row in result.result_rows]
+
+    seen: set[tuple[str, str]] = set()
+    out: list[dict[str, Any]] = []
+    for result in (exact, near):
+        for row in result.result_rows:
+            d = dict(zip(result.column_names, row))
+            key = (str(d["id_a"]), str(d["id_b"]))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(d)
+    out.sort(key=lambda d: d["distance"])
+    return out
 
 
 def set_status(asset_id: str, status: str, client: Client | None = None) -> None:

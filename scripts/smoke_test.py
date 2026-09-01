@@ -8,7 +8,11 @@ you can confirm the whole system before recording the demo.
 """
 from __future__ import annotations
 
+import os
 import sys
+
+# Allow running as `python scripts/smoke_test.py` from the repo root.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agent import clickhouse_client as ch
 from agent.librarian import list_duplicates, surface_repurposable

@@ -14,7 +14,11 @@ class Settings:
 
     # Google Cloud / Vertex AI
     gcp_project: str = os.getenv("GOOGLE_CLOUD_PROJECT", "")
+    # Gemini generation location. Gemini 3.x Flash is served from "global".
     gcp_location: str = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+    # Embeddings need a REGIONAL endpoint — multimodalembedding@001 is not served
+    # from "global" — so it has its own location, defaulting to us-central1.
+    embedding_location: str = os.getenv("EMBEDDING_LOCATION", "us-central1")
     use_vertexai: bool = os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "true").lower() == "true"
 
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
