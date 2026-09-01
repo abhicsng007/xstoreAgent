@@ -1,14 +1,16 @@
-"""embed_asset / embed_text: multimodal embeddings in one shared vector space.
+"""Embeddings for ReelVault.
 
-Uses Vertex AI `multimodalembedding@001` (1408-dim), which maps images, video,
-and text into the SAME space. That is the core trick behind repurpose search: a
-plain-text project brief embeds into the same space as the media, so
-`cosineDistance(brief_vec, asset_vec)` retrieves a *video clip* from a *text*
-query.
+Search vector (embed_text / embed_asset): the dedicated `gemini-embedding-001`
+text model embeds each asset's Gemini caption and every project brief into one
+consistent space. Because Gemini's vision already described each asset in its
+caption, a text brief retrieves the right video / image / audio / vector by
+MEANING — cross-modal search without the multimodal "modality gap" that skews
+raw image-vs-text distances.
 
-Audio and document assets have no native multimodal embedding, so we embed their
-Gemini-generated caption/text as contextual text — still landing in the shared
-1408-d space, so cross-modal search keeps working.
+Dedup vector (embed_image / embed_video): Vertex `multimodalembedding@001`
+(1408-dim) gives true visual-similarity embeddings used for near-duplicate
+detection. Both embedding families run from a regional endpoint (EMBEDDING_LOCATION),
+since neither is served from Gemini's "global" location.
 """
 from __future__ import annotations
 
@@ -16,12 +18,12 @@ import functools
 
 from ..config import get_settings
 
-EMBED_DIM = 1408  # multimodalembedding@001 default output dimensionality
+EMBED_DIM = 1408  # multimodalembedding@001 output dimensionality (image/video, dedup)
 
 
 @functools.lru_cache
 def _model():
-    """Lazy-load the Vertex model so importing this module needs no credentials."""
+    """Lazy-load the Vertex multimodal model (image/video embeddings for dedup)."""
     import vertexai
     from vertexai.vision_models import MultiModalEmbeddingModel
 
@@ -31,12 +33,36 @@ def _model():
     return MultiModalEmbeddingModel.from_pretrained(s.mm_embedding_model)
 
 
+@functools.lru_cache
+def _text_client():
+    """Lazy GenAI client for the dedicated text embedder (gemini-embedding-001)."""
+    from google import genai
+
+    s = get_settings()
+    if s.use_vertexai:
+        # gemini-embedding-001 is served regionally, not from "global".
+        return genai.Client(vertexai=True, project=s.gcp_project, location=s.embedding_location)
+    return genai.Client()
+
+
 def embed_text(text: str) -> list[float]:
-    """Embed free text (a project brief, or an asset caption) into the shared space."""
+    """Embed free text (a project brief, or an asset caption) for semantic search.
+
+    Uses the dedicated gemini-embedding-001 text model — much stronger at
+    discriminating short descriptive text than the multimodal model's text tower,
+    so briefs match the right captions sharply. This is the vector stored for every
+    asset (its caption) and computed for every brief, keeping both sides in one
+    consistent space.
+    """
     if not text.strip():
         return []
-    embeddings = _model().get_embeddings(contextual_text=text[:1024], dimension=EMBED_DIM)
-    return list(embeddings.text_embedding or [])
+    from ..retry import with_retry
+
+    resp = with_retry(lambda: _text_client().models.embed_content(
+        model=get_settings().text_embedding_model,
+        contents=text[:2048],
+    ))
+    return list(resp.embeddings[0].values or [])
 
 
 def embed_image(path: str, contextual_text: str = "") -> list[float]:

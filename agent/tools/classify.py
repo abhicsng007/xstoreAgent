@@ -100,7 +100,9 @@ def classify_asset(path: str, asset_type: str, ext: str) -> dict:
     parts.append(types.Part.from_text(text=hint))
 
     try:
-        resp = _client().models.generate_content(
+        from ..retry import with_retry
+
+        resp = with_retry(lambda: _client().models.generate_content(
             model=get_settings().gemini_model,
             contents=[types.Content(role="user", parts=parts)],
             config=types.GenerateContentConfig(
@@ -109,7 +111,7 @@ def classify_asset(path: str, asset_type: str, ext: str) -> dict:
                 response_schema=_SCHEMA,
                 temperature=0.2,
             ),
-        )
+        ))
         data = json.loads(resp.text)
     except Exception as exc:
         print(f"[classify] fallback for {filename}: {exc}")
