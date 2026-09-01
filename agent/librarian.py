@@ -1,4 +1,4 @@
-"""The Librarian: the ADK root agent for ReelVault.
+"""The Librarian: the ADK root agent for xStoreAgent.
 
 Registers the ingestion, search, dedup, and archive actions as function tools and
 (when available) the ClickHouse MCP toolset. The agent reasons over a creator's

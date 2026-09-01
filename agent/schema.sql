@@ -1,9 +1,9 @@
--- ReelVault ClickHouse schema (partner integration)
+-- xStoreAgent ClickHouse schema (partner integration)
 -- Run once against your ClickHouse Cloud instance to provision the asset catalog.
 
-CREATE DATABASE IF NOT EXISTS reelvault;
+CREATE DATABASE IF NOT EXISTS xstoreagent;
 
-CREATE TABLE IF NOT EXISTS reelvault.assets
+CREATE TABLE IF NOT EXISTS xstoreagent.assets
 (
     id            UUID DEFAULT generateUUIDv4(),
     path          String,                         -- absolute source path
@@ -25,7 +25,7 @@ ORDER BY (asset_type, created_at);
 
 -- Repurpose search (brief -> assets), lower cosineDistance = closer match:
 --   SELECT id, filename, asset_type, caption, cosineDistance(embedding, {vec:Array(Float32)}) AS dist
---   FROM reelvault.assets
+--   FROM xstoreagent.assets
 --   WHERE status != 'archived' AND length(embedding) > 0
 --   ORDER BY dist ASC
 --   LIMIT 12;

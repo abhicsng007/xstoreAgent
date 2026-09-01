@@ -1,4 +1,4 @@
-"""ClickHouse data layer for ReelVault (partner integration).
+"""ClickHouse data layer for xStoreAgent (partner integration).
 
 This is the direct `clickhouse-connect` client used by the FastAPI server and as
 the fallback behind the ClickHouse MCP toolset. It owns the `assets` catalog:

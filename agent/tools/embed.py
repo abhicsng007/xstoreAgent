@@ -1,4 +1,4 @@
-"""Embeddings for ReelVault.
+"""Embeddings for xStoreAgent.
 
 Search vector (embed_text / embed_asset): the dedicated `gemini-embedding-001`
 text model embeds each asset's Gemini caption and every project brief into one

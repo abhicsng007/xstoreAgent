@@ -31,7 +31,7 @@ def stage(name: str, fn):
 
 def main() -> int:
     folder = sys.argv[1] if len(sys.argv) > 1 else "sample_assets"
-    print("ReelVault smoke test\n" + "-" * 40)
+    print("xStoreAgent smoke test\n" + "-" * 40)
 
     stage("ClickHouse connectivity", lambda: ch.get_client().command("SELECT 1"))
     stage("schema provisioned", ch.ensure_schema)

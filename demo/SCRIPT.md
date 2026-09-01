@@ -1,4 +1,4 @@
-# ReelVault — 3-minute demo script & storyboard
+# xStoreAgent — 3-minute demo script & storyboard
 
 Target: ≤ 3:00, English (or English subtitles). Public on YouTube/Vimeo.
 Judging maps to: **Tech implementation · Design · Impact · Idea.** Hit all four.
@@ -14,7 +14,7 @@ Judging maps to: **Tech implementation · Design · Impact · Idea.** Hit all fo
 
 ### 0:20–0:40 · Ingest & organize
 - In the dashboard, paste a folder path → **Ingest & Organize**.
-- Narrate: *"ReelVault's Gemini agent walks the folder, classifies every file by
+- Narrate: *"xStoreAgent's Gemini agent walks the folder, classifies every file by
   type, and captions each one — deciding what's reusable versus project-specific."*
 - **On screen:** library fills — per-type stat cards (video/image/icon/vector/
   audio), reusable badges.
@@ -41,10 +41,10 @@ Judging maps to: **Tech implementation · Design · Impact · Idea.** Hit all fo
   You approve."* Click **Archive** on a duplicate; watch it drop from the library.
 
 ### 2:30–2:55 · Impact + close
-> "ReelVault turns a creator's dead archive into a living, searchable library —
+> "xStoreAgent turns a creator's dead archive into a living, searchable library —
 > less re-shooting, less re-licensing, less wasted storage. An asset librarian
 > that actually remembers."
-- **On screen:** the tidy library + the ReelVault logo. Mention: built with
+- **On screen:** the tidy library + the xStoreAgent logo. Mention: built with
   Gemini + Google ADK on Cloud Run, powered by ClickHouse.
 
 ### 2:55–3:00 · Card

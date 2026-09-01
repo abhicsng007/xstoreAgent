@@ -1,4 +1,4 @@
-# ReelVault — AI Asset Librarian for Film/Video Teams
+# xStoreAgent — AI Asset Librarian for Film/Video Teams
 
 > **Agentic Cinema: The Blockbuster Hackathon** submission — **ClickHouse track**
 > Built with **Gemini + Google Agent Development Kit (ADK)** and **ClickHouse Cloud**.
@@ -6,7 +6,7 @@
 Production teams drown in assets — B-roll, VFX plates, logos, icons, SFX, music
 stems — scattered across projects with no memory. When a new project starts, the
 reusable material is invisible, so teams re-shoot, re-license, and pay to store
-stale duplicates. **ReelVault is an agent that gives a creator's media library a
+stale duplicates. **xStoreAgent is an agent that gives a creator's media library a
 brain.**
 
 Point it at a folder and it:

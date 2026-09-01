@@ -1,4 +1,4 @@
-"""Central configuration for ReelVault, loaded from environment / .env."""
+"""Central configuration for xStoreAgent, loaded from environment / .env."""
 from __future__ import annotations
 
 import os
@@ -30,7 +30,7 @@ class Settings:
     ch_port: int = int(os.getenv("CLICKHOUSE_PORT", "8443"))
     ch_user: str = os.getenv("CLICKHOUSE_USER", "default")
     ch_password: str = os.getenv("CLICKHOUSE_PASSWORD", "")
-    ch_database: str = os.getenv("CLICKHOUSE_DATABASE", "reelvault")
+    ch_database: str = os.getenv("CLICKHOUSE_DATABASE", "xstoreagent")
     ch_secure: bool = os.getenv("CLICKHOUSE_SECURE", "true").lower() == "true"
 
     # Tuning

@@ -1,4 +1,4 @@
-// ReelVault dashboard — talks to the FastAPI backend in server/app.py.
+// xStoreAgent dashboard — talks to the FastAPI backend in server/app.py.
 const API = ""; // same origin
 
 const TYPE_ICON = {

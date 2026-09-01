@@ -1,4 +1,4 @@
-"""ReelVault FastAPI server.
+"""xStoreAgent FastAPI server.
 
 Exposes the Librarian's actions as a small REST API for the web dashboard and
 serves the static frontend. The dashboard endpoints call the underlying tool
@@ -25,7 +25,7 @@ from agent.librarian import (
 )
 from agent.tools.ingest import ingest_folder
 
-app = FastAPI(title="ReelVault", description="AI Asset Librarian for film/video teams")
+app = FastAPI(title="xStoreAgent", description="AI Asset Librarian for film/video teams")
 
 app.add_middleware(
     CORSMiddleware,
@@ -60,7 +60,7 @@ class ChatRequest(BaseModel):
 # --- Health ---
 @app.get("/api/health")
 def health() -> dict:
-    return {"ok": True, "service": "reelvault"}
+    return {"ok": True, "service": "xstoreagent"}
 
 
 # --- Ingest ---
@@ -119,9 +119,9 @@ async def api_chat(req: ChatRequest) -> dict:
 
         from agent.librarian import build_agent
 
-        runner = InMemoryRunner(agent=build_agent(), app_name="reelvault")
+        runner = InMemoryRunner(agent=build_agent(), app_name="xstoreagent")
         await runner.session_service.create_session(
-            app_name="reelvault", user_id="web", session_id=req.session_id
+            app_name="xstoreagent", user_id="web", session_id=req.session_id
         )
         content = types.Content(role="user", parts=[types.Part.from_text(text=req.message)])
         reply = ""
