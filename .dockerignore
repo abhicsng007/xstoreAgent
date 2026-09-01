@@ -1,0 +1,13 @@
+.git
+.venv
+venv
+__pycache__
+*.pyc
+.env
+gcp-key.json
+service-account*.json
+sample_assets
+demo
+web/node_modules
+*.md
+!README.md

@@ -159,6 +159,40 @@ def set_status(asset_id: str, status: str, client: Client | None = None) -> None
     )
 
 
+def list_assets(
+    asset_type: str | None = None,
+    status: str | None = None,
+    limit: int = 200,
+    client: Client | None = None,
+) -> list[dict[str, Any]]:
+    """List catalog assets for the dashboard grid, newest first.
+
+    Optional filters by `asset_type` and lifecycle `status`. The embedding vector
+    is intentionally omitted from the payload (large, not needed by the UI).
+    """
+    client = client or get_client()
+    where = ["1"]
+    params: dict[str, Any] = {"limit": limit}
+    if asset_type:
+        where.append("asset_type = {atype:String}")
+        params["atype"] = asset_type
+    if status:
+        where.append("status = {status:String}")
+        params["status"] = status
+    result = client.query(
+        f"""
+        SELECT toString(id) AS id, filename, asset_type, ext, size_bytes,
+               created_at, project, caption, tags, reusable, status
+        FROM assets
+        WHERE {' AND '.join(where)}
+        ORDER BY created_at DESC
+        LIMIT {{limit:UInt32}}
+        """,
+        parameters=params,
+    )
+    return [dict(zip(result.column_names, row)) for row in result.result_rows]
+
+
 def library_overview(client: Client | None = None) -> list[dict[str, Any]]:
     """Per-type counts and bytes for the dashboard roll-up."""
     client = client or get_client()

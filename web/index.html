@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ReelVault — AI Asset Librarian</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">🎬</span>
+    <div>
+      <h1>ReelVault</h1>
+      <p>AI Asset Librarian · <span class="partner">ClickHouse</span> × <span class="partner">Gemini</span></p>
+    </div>
+  </div>
+  <form id="ingest-form" class="ingest">
+    <input id="ingest-root" type="text" placeholder="/path/to/media/folder" />
+    <input id="ingest-project" type="text" placeholder="project name (optional)" />
+    <button type="submit">Ingest &amp; Organize</button>
+  </form>
+</header>
+
+<main>
+  <!-- Repurpose search -->
+  <section class="card hero">
+    <h2>Start a new project</h2>
+    <p class="muted">Describe what you're making — the Librarian surfaces reusable assets from your whole library, across video, images, audio and vectors.</p>
+    <form id="search-form" class="search">
+      <input id="search-brief" type="text"
+        placeholder="e.g. upbeat 30s product ad — city b-roll, brand logo, energetic music bed" />
+      <button type="submit">Surface reusable assets</button>
+    </form>
+    <div id="search-results" class="results-grid"></div>
+  </section>
+
+  <!-- Library overview -->
+  <section class="card">
+    <div class="card-head">
+      <h2>Library</h2>
+      <div id="storage-summary" class="muted"></div>
+    </div>
+    <div id="type-stats" class="stat-row"></div>
+    <div id="type-filter" class="chips"></div>
+    <div id="asset-grid" class="results-grid"></div>
+  </section>
+
+  <!-- Review: duplicates + stale -->
+  <section class="card">
+    <div class="card-head">
+      <h2>Reclaim storage</h2>
+      <button id="refresh-review" class="ghost">Refresh</button>
+    </div>
+    <p class="muted">Duplicate and stale files the Librarian recommends archiving. Nothing is deleted — you approve each action.</p>
+    <div id="review-list"></div>
+  </section>
+</main>
+
+<div id="toast" class="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
