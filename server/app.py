@@ -9,10 +9,12 @@ Run locally:  uvicorn server.app:app --reload
 """
 from __future__ import annotations
 
+import json
 import os
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -23,7 +25,7 @@ from agent.librarian import (
     list_duplicates,
     surface_repurposable,
 )
-from agent.tools.ingest import ingest_folder
+from agent.tools.ingest import ingest_folder, ingest_folder_events
 
 app = FastAPI(title="xStoreAgent", description="AI Asset Librarian for film/video teams")
 
@@ -69,6 +71,32 @@ def api_ingest(req: IngestRequest) -> dict:
     if not os.path.isdir(req.root):
         raise HTTPException(400, f"Not a folder: {req.root}")
     return ingest_folder(req.root, project=req.project, limit=req.limit)
+
+
+@app.get("/api/ingest/stream")
+def api_ingest_stream(root: str, project: str = "", limit: int | None = None):
+    """Server-Sent Events: run ingestion and stream the multi-agent reasoning
+    trace (Scanner → Curator → Memory → Archivist) to the dashboard live.
+
+    Uses GET so the browser's native EventSource can consume it. Each event is a
+    JSON `step` (or `start`/`done`/`error`) emitted the moment the pipeline reaches
+    it, so the UI renders the agents thinking in real time.
+    """
+    if not os.path.isdir(root):
+        raise HTTPException(400, f"Not a folder: {root}")
+
+    def event_stream():
+        try:
+            for ev in ingest_folder_events(root, project=project, limit=limit):
+                yield f"data: {json.dumps(ev)}\n\n"
+        except Exception as exc:  # surface a crash as a final SSE event, not a 500
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)[:300]})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # --- Library (dashboard) ---

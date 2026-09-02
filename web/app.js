@@ -98,20 +98,106 @@ document.getElementById("search-form").onsubmit = async (e) => {
   } catch (err) { box.innerHTML = `<div class="empty">Search failed: ${err.message}</div>`; }
 };
 
-// --- Ingest ---
-document.getElementById("ingest-form").onsubmit = async (e) => {
+// --- Ingest with live multi-agent reasoning (Server-Sent Events) ---
+const CREW = [
+  ["Scanner", "🔍"], ["Curator", "🎬"], ["Memory", "🧠"], ["Archivist", "🗄️"],
+];
+
+function renderCrew(activeName) {
+  document.getElementById("crew").innerHTML = CREW.map(([name, ava]) => {
+    const state = crewState[name] || "";
+    const cls = name === activeName ? "active" : state;
+    const tick = state === "done" ? "✓" : (name === activeName ? "▸" : "");
+    return `<div class="member ${cls}">
+        <span class="ava">${ava}</span><span class="nm">${name}</span>
+        <span class="tick">${tick}</span>
+      </div>`;
+  }).join("");
+}
+
+let crewState = {};
+
+function reasoningStep(ev) {
+  const log = document.getElementById("reasoning-log");
+  const row = document.createElement("div");
+  row.className = `rstep ${ev.status || "info"}`;
+  row.innerHTML = `
+    <span class="rdot"></span>
+    <span class="ricon">${ev.icon || "•"}</span>
+    <div class="rbody">
+      <div class="rhead"><span class="ragent">${ev.agent || ""}</span>
+        <span class="rtitle">${ev.title || ""}</span></div>
+      ${ev.detail ? `<div class="rdetail">${ev.detail}</div>` : ""}
+    </div>`;
+  log.appendChild(row);
+  log.scrollTop = log.scrollHeight;
+}
+
+function startIngestStream(root, project) {
+  const card = document.getElementById("reasoning-card");
+  const log = document.getElementById("reasoning-log");
+  const status = document.getElementById("reasoning-status");
+  card.hidden = false;
+  log.innerHTML = "";
+  crewState = {};
+  renderCrew(null);
+  status.textContent = "the crew is working…";
+  card.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  const qs = new URLSearchParams({ root, project }).toString();
+  const es = new EventSource(`${API}/api/ingest/stream?${qs}`);
+
+  es.onmessage = (m) => {
+    let ev;
+    try { ev = JSON.parse(m.data); } catch { return; }
+
+    if (ev.type === "start") { status.textContent = `ingesting ${ev.root}…`; return; }
+
+    if (ev.type === "step") {
+      // A "done" step retires that agent; anything else marks it active.
+      if (ev.status === "done") crewState[ev.agent] = "done";
+      renderCrew(ev.status === "done" ? null : ev.agent);
+      reasoningStep(ev);
+      return;
+    }
+
+    if (ev.type === "done") {
+      const s = ev.summary || {};
+      CREW.forEach(([n]) => (crewState[n] = "done"));
+      renderCrew(null);
+      reasoningStep({
+        agent: "Librarian", icon: "✅", status: "done", title: "Library updated",
+        detail: `${s.inserted ?? 0} assets remembered from ${s.scanned ?? 0} files.`,
+      });
+      // Flag the closing line as the amber summary card.
+      log.lastChild.classList.add("summary");
+      status.textContent = "done.";
+      es.close();
+      toast(`Ingested ${s.inserted ?? 0} assets from ${s.scanned ?? 0} files.`);
+      loadLibrary(); loadReview();
+      return;
+    }
+
+    if (ev.type === "error") {
+      reasoningStep({ agent: "System", icon: "⚠️", status: "error",
+        title: "Ingest failed", detail: ev.message || "" });
+      status.textContent = "failed.";
+      es.close();
+    }
+  };
+
+  es.onerror = () => {
+    status.textContent = "connection closed.";
+    es.close();
+  };
+}
+
+document.getElementById("ingest-form").onsubmit = (e) => {
   e.preventDefault();
   const root = document.getElementById("ingest-root").value.trim();
   const project = document.getElementById("ingest-project").value.trim();
   if (!root) return;
-  toast("Ingesting… classifying, captioning and embedding assets.");
-  try {
-    const r = await api("/api/ingest", {
-      method: "POST", body: JSON.stringify({ root, project }),
-    });
-    toast(`Ingested ${r.inserted} assets from ${r.scanned} files.`);
-    loadLibrary(); loadReview();
-  } catch (err) { toast(`Ingest failed: ${err.message}`, 5000); }
+  startIngestStream(root, project);
 };
 
 // --- Review: duplicates + stale ---
