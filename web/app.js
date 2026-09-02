@@ -151,9 +151,11 @@ document.getElementById("search-form").onsubmit = async (e) => {
 const CREW = [
   ["Scanner", "🔍"], ["Curator", "🎬"], ["Memory", "🧠"], ["Archivist", "🗄️"],
 ];
+const SCOUT_CREW = [["Scout", "🛰️"]];
+let currentCrew = CREW;
 
 function renderCrew(activeName) {
-  document.getElementById("crew").innerHTML = CREW.map(([name, ava]) => {
+  document.getElementById("crew").innerHTML = currentCrew.map(([name, ava]) => {
     const state = crewState[name] || "";
     const cls = name === activeName ? "active" : state;
     const tick = state === "done" ? "✓" : (name === activeName ? "▸" : "");
@@ -183,6 +185,7 @@ function reasoningStep(ev) {
 }
 
 function startIngestStream(root, project) {
+  currentCrew = CREW;
   const card = document.getElementById("reasoning-card");
   const log = document.getElementById("reasoning-log");
   const status = document.getElementById("reasoning-status");
@@ -223,7 +226,7 @@ function startIngestStream(root, project) {
       status.textContent = "done.";
       es.close();
       toast(`Ingested ${s.inserted ?? 0} assets from ${s.scanned ?? 0} files.`);
-      loadLibrary(); loadReview();
+      loadLibrary(); loadStorage(); loadReview();
       return;
     }
 
@@ -248,6 +251,77 @@ document.getElementById("ingest-form").onsubmit = (e) => {
   if (!root) return;
   startIngestStream(root, project);
 };
+
+// --- Storage Scout ---
+async function loadStorage() {
+  const s = await api("/api/storage");
+  const usedGb = (s.used_bytes / 1024 ** 3);
+  const shown = Math.max(s.used_pct, s.used_pct > 0 ? 1.5 : 0); // keep a sliver visible
+  const warn = s.over_threshold;
+  document.getElementById("storage-meter").innerHTML = `
+    <div class="bar"><div class="fill ${warn ? "warn" : ""}" style="width:${Math.min(shown, 100)}%"></div></div>
+    <div class="lbl">
+      <b>${usedGb < 0.01 ? (s.used_bytes / 1024 ** 2).toFixed(1) + " MB" : usedGb.toFixed(2) + " GB"}</b>
+      of ${s.plan_gb} GB plan used · <b>${s.used_pct}%</b>
+      ${warn ? `<span class="alert">— over ${s.warn_pct}%, offload recommended</span>` : ""}
+    </div>`;
+}
+
+function providerCard(p, top = false) {
+  const src = p.source === "web" ? `<span class="psrc web">web</span>` : `<span class="psrc fallback">fallback</span>`;
+  const link = p.url ? `<a href="${p.url}" target="_blank" rel="noopener noreferrer">${p.url}</a>` : "";
+  return `<div class="provider ${top ? "top" : ""}">
+      <div class="pname">${p.name} ${src}</div>
+      <div><span class="gb">${p.free_gb} GB free</span></div>
+      <div class="pnote">${p.note || ""}</div>
+      ${link}
+    </div>`;
+}
+
+function startScoutStream() {
+  currentCrew = SCOUT_CREW;
+  const card = document.getElementById("reasoning-card");
+  const log = document.getElementById("reasoning-log");
+  const status = document.getElementById("reasoning-status");
+  const results = document.getElementById("scout-results");
+  card.hidden = false;
+  log.innerHTML = "";
+  results.innerHTML = "";
+  crewState = {};
+  renderCrew("Scout");
+  status.textContent = "the Scout is searching…";
+  card.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  const es = new EventSource(`${API}/api/scout/stream`);
+  es.onmessage = (m) => {
+    let ev;
+    try { ev = JSON.parse(m.data); } catch { return; }
+
+    if (ev.type === "step") { reasoningStep(ev); return; }
+
+    if (ev.type === "done") {
+      crewState["Scout"] = "done";
+      renderCrew(null);
+      const opts = ev.options || [];
+      results.innerHTML = opts.map((p, i) => providerCard(p, i === 0)).join("");
+      status.textContent = ev.grounded ? "done · sourced live from the web." : "done.";
+      es.close();
+      loadStorage();
+      toast(`Scout found ${opts.length} free-storage options.`);
+      return;
+    }
+
+    if (ev.type === "error") {
+      reasoningStep({ agent: "Scout", icon: "⚠️", status: "error",
+        title: "Scout failed", detail: ev.message || "" });
+      status.textContent = "failed.";
+      es.close();
+    }
+  };
+  es.onerror = () => { status.textContent = "connection closed."; es.close(); };
+}
+
+document.getElementById("scout-btn").onclick = startScoutStream;
 
 // --- Review: duplicates + stale ---
 async function loadReview() {
@@ -290,7 +364,7 @@ window.approve = async (assetId, action) => {
   try {
     await api("/api/approve", { method: "POST", body: JSON.stringify({ asset_id: assetId, action }) });
     toast(action === "archive" ? "Archived." : "Kept.");
-    loadLibrary(); loadReview();
+    loadLibrary(); loadStorage(); loadReview();
   } catch (err) { toast(`Action failed: ${err.message}`, 4000); }
 };
 
@@ -298,6 +372,6 @@ document.getElementById("refresh-review").onclick = loadReview;
 
 // --- Boot ---
 (async function boot() {
-  try { await loadLibrary(); await loadReview(); }
+  try { await loadLibrary(); await loadStorage(); await loadReview(); }
   catch (err) { toast(`Backend not reachable: ${err.message}`, 6000); }
 })();

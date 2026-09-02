@@ -27,6 +27,7 @@ from agent.librarian import (
 )
 from agent.reusability import REUSABLE_BAND, reusability_score
 from agent.tools.ingest import ingest_folder, ingest_folder_events
+from agent.tools.scout import scout_storage_events, storage_status
 
 app = FastAPI(title="xStoreAgent", description="AI Asset Librarian for film/video teams")
 
@@ -140,6 +141,31 @@ def api_assets(
     if sort == "reusability":
         assets.sort(key=lambda a: a["reusability_score"], reverse=True)
     return {"assets": assets, "reusable_band": REUSABLE_BAND}
+
+
+# --- Storage Scout ---
+@app.get("/api/storage")
+def api_storage() -> dict:
+    """Current library usage vs the storage-plan cap (drives the usage meter)."""
+    return storage_status()
+
+
+@app.get("/api/scout/stream")
+def api_scout_stream():
+    """Server-Sent Events: run the Scout — assess storage, then live-search the web
+    for free cloud storage — streaming its reasoning to the dashboard."""
+    def event_stream():
+        try:
+            for ev in scout_storage_events():
+                yield f"data: {json.dumps(ev)}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)[:300]})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # --- Repurpose search ---

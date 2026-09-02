@@ -15,6 +15,7 @@ from .clickhouse_mcp import build_clickhouse_mcp_toolset
 from .config import get_settings
 from .tools.embed import embed_text
 from .tools.ingest import ingest_folder as _ingest_folder
+from .tools.scout import find_free_storage as _find_free_storage
 
 # --- Tool functions (ADK wraps these; docstrings become the tool descriptions) ---
 
@@ -75,6 +76,13 @@ def library_stats() -> list[dict]:
     return ch.library_overview()
 
 
+def find_storage() -> dict:
+    """Check storage usage against the plan and, when it's filling up, search the
+    web for cloud providers with a free tier to offload to. Returns the storage
+    status plus ranked free-storage options (name, free GB, note, signup URL)."""
+    return _find_free_storage()
+
+
 _INSTRUCTION = """You are the Librarian, an AI asset manager for a film/video
 production team. You help creators organize, understand, and REUSE their media.
 
@@ -84,6 +92,8 @@ You can:
   - list_duplicates: find duplicate/near-duplicate files to reclaim storage.
   - archive_asset: archive a file — ONLY after the user explicitly approves.
   - library_stats: report what's in the library.
+  - find_storage: when storage is filling up, search the web for free cloud
+    storage to offload to.
 
 Rules:
   - Never archive or delete anything without explicit user approval. Propose, then
@@ -103,6 +113,7 @@ def build_agent():
         FunctionTool(func=list_duplicates),
         FunctionTool(func=archive_asset),
         FunctionTool(func=library_stats),
+        FunctionTool(func=find_storage),
     ]
     mcp = build_clickhouse_mcp_toolset()
     if mcp is not None:

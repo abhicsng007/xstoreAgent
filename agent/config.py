@@ -35,6 +35,10 @@ class Settings:
 
     # Tuning
     dup_distance_threshold: float = float(os.getenv("DUP_DISTANCE_THRESHOLD", "0.05"))
+    # Storage plan cap (GB) the Scout measures the library against; when usage
+    # crosses `storage_warn_pct` it recommends web-sourced free storage.
+    storage_plan_gb: float = float(os.getenv("STORAGE_PLAN_GB", "15"))
+    storage_warn_pct: int = int(os.getenv("STORAGE_WARN_PCT", "80"))
 
 
 @lru_cache
