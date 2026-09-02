@@ -1,12 +1,8 @@
 """The Librarian: the ADK root agent for xStoreAgent.
 
-Registers the ingestion, search, dedup, and archive actions as function tools and
-(when available) the ClickHouse MCP toolset. The agent reasons over a creator's
-media library: it ingests folders, surfaces repurposable assets from a project
-brief, flags duplicates/stale files, and archives them on approval.
-
-Run interactively with the ADK dev UI:  `adk web`  (from the repo root),
-or import `root_agent` from the FastAPI server for programmatic calls.
+Writes (ingest / archive) are function tools. Catalog *reads* go through the
+official ClickHouse MCP server so judges see `list_tables` / `run_select_query`
+on the live path. Run interactively with `adk web` (repo root) or via `/api/chat/stream`.
 """
 from __future__ import annotations
 
@@ -15,9 +11,6 @@ from .clickhouse_mcp import build_clickhouse_mcp_toolset
 from .config import get_settings
 from .tools.embed import embed_text
 from .tools.ingest import ingest_folder as _ingest_folder
-from .tools.scout import find_free_storage as _find_free_storage
-
-# --- Tool functions (ADK wraps these; docstrings become the tool descriptions) ---
 
 
 def ingest_folder(root: str, project: str = "") -> dict:
@@ -35,96 +28,146 @@ def ingest_folder(root: str, project: str = "") -> dict:
     return _ingest_folder(root, project=project)
 
 
-def surface_repurposable(brief: str, limit: int = 12) -> list[dict]:
-    """Given a new project brief, return existing assets worth reusing, ranked by
-    relevance. Works cross-modal: a text brief can surface matching video, images,
-    audio, or vectors because everything shares one embedding space.
+def embed_brief(brief: str) -> dict:
+    """Embed a project brief and store the vector in ClickHouse `brief_queries`.
+
+    Do not put the floats in SQL. After this returns, search with a JOIN against
+    the latest brief_queries row (see the `how_to_search` field).
 
     Args:
-        brief: a description of the new project's needs.
-        limit: max number of assets to return.
-
-    Returns:
-        Ranked assets, each with filename, asset_type, caption, and a match score.
+        brief: natural-language description of the new project's needs.
     """
     vec = embed_text(brief)
     if not vec:
-        return []
-    results = ch.repurpose_search(vec, limit=limit)
-    for r in results:
-        # Turn cosine distance into an intuitive 0-100 match score for the UI/agent.
-        r["match_score"] = round(max(0.0, 1.0 - float(r.get("distance", 1.0))) * 100)
-    return results
-
-
-def list_duplicates() -> list[dict]:
-    """Find near-duplicate and exact-duplicate asset pairs in the catalog so the
-    user can reclaim storage. Returns candidate pairs; nothing is deleted."""
-    return ch.find_duplicates()
+        return {"dim": 0, "stored": False, "error": "empty embedding"}
+    ch.insert_brief(brief, vec)
+    db = get_settings().ch_database
+    return {
+        "dim": len(vec),
+        "stored": True,
+        "how_to_search": (
+            f"WITH q AS (SELECT embedding FROM {db}.brief_queries ORDER BY ts DESC LIMIT 1) "
+            f"SELECT filename, asset_type, asset_subtype, caption, tags, reusable, "
+            f"toString(id) AS id, cosineDistance(a.embedding, q.embedding) AS dist "
+            f"FROM {db}.assets AS a, q "
+            f"WHERE status != 'archived' AND length(a.embedding) > 0 "
+            f"ORDER BY dist ASC LIMIT 12"
+        ),
+    }
 
 
 def archive_asset(asset_id: str) -> dict:
     """Mark an asset as archived (reversible). Use only after the user approves.
     Archived assets drop out of repurpose search but are never deleted."""
     ch.set_status(asset_id, "archived")
+    try:
+        ch.insert_events([{"asset_id": asset_id, "event": "archived"}])
+    except Exception as exc:  # noqa: BLE001
+        print(f"[librarian] archive event skipped: {exc}")
     return {"asset_id": asset_id, "status": "archived"}
 
 
+def surface_repurposable(brief: str, limit: int = 12) -> list[dict]:
+    """Dashboard helper (not an agent tool): rank assets by caption embedding."""
+    vec = embed_text(brief)
+    if not vec:
+        return []
+    results = ch.repurpose_search(vec, limit=limit)
+    for r in results:
+        r["match_score"] = round(max(0.0, 1.0 - float(r.get("distance", 1.0))) * 100)
+    return results
+
+
+def list_duplicates() -> list[dict]:
+    """Dashboard helper (not an agent tool): exact + near duplicate pairs."""
+    return ch.find_duplicates()
+
+
 def library_stats() -> list[dict]:
-    """Per-type roll-up of the library: file counts, bytes, reusable and archived
-    counts. Use for the dashboard and for reporting storage usage."""
+    """Dashboard helper (not an agent tool): per-type roll-up."""
     return ch.library_overview()
 
 
-def find_storage() -> dict:
-    """Check storage usage against the plan and, when it's filling up, search the
-    web for cloud providers with a free tier to offload to. Returns the storage
-    status plus ranked free-storage options (name, free GB, note, signup URL)."""
-    return _find_free_storage()
+def _instruction() -> str:
+    db = get_settings().ch_database
+    return f"""You are the Librarian, an AI asset manager for a film/video production team.
+You organize media and tell creators what they can REUSE instead of reshooting.
 
+The catalog lives in ClickHouse database `{db}`.
+Tables:
+  `{db}.assets` — one row per file (caption, tags, reusable, status, content_hash, embedding Array(Float32), size_bytes, asset_type, asset_subtype)
+  `{db}.asset_events` — ingest/search/archive facts (ts, event, bytes, detail)
+  `{db}.brief_queries` — latest project-brief embedding written by embed_brief
 
-_INSTRUCTION = """You are the Librarian, an AI asset manager for a film/video
-production team. You help creators organize, understand, and REUSE their media.
+READS — you MUST use the ClickHouse MCP tools. Never invent table contents.
+  1. Call list_tables (database `{db}`) before the first catalog answer in a session.
+  2. Answer stats, waste, and reuse questions ONLY with run_select_query or run_query.
+  3. Always qualify tables as `{db}.assets` / `{db}.asset_events`.
 
-You can:
-  - ingest_folder: bring a folder of media into the catalog.
-  - surface_repurposable: given a new project brief, recommend assets to reuse.
-  - list_duplicates: find duplicate/near-duplicate files to reclaim storage.
-  - archive_asset: archive a file — ONLY after the user explicitly approves.
-  - library_stats: report what's in the library.
-  - find_storage: when storage is filling up, search the web for free cloud
-    storage to offload to.
+Canonical queries (adapt filters, keep this shape):
 
-Rules:
-  - Never archive or delete anything without explicit user approval. Propose, then
-    wait for confirmation.
-  - When surfacing repurposable assets, briefly say WHY each fits the brief.
-  - Be concise and practical; you are a working tool for busy creators."""
+Library rollup:
+  SELECT asset_type, count() AS n, sum(size_bytes) AS bytes, countIf(reusable) AS reusable
+  FROM {db}.assets WHERE status != 'archived' GROUP BY asset_type ORDER BY bytes DESC
+
+Exact duplicate waste (GROUP BY — do not CROSS JOIN):
+  SELECT content_hash, groupArray(filename) AS files, count() AS n,
+         sum(size_bytes) - max(size_bytes) AS wasted_bytes
+  FROM {db}.assets
+  WHERE content_hash != '' AND status != 'archived'
+  GROUP BY content_hash HAVING n > 1
+  ORDER BY wasted_bytes DESC
+
+Reuse search for a brief:
+  Call embed_brief(brief) first. It stores the vector in `{db}.brief_queries`.
+  Then run_query using the `how_to_search` SQL it returned (JOIN the latest brief
+  row — never paste thousands of floats into the query).
+
+WRITES — function tools only:
+  ingest_folder, archive_asset. Never archive unless the user explicitly approves
+  a specific asset id.
+
+How to answer a "what can we reuse / what's wasted / what should I archive" brief:
+  - list_tables
+  - rollup query
+  - duplicate-waste query
+  - embed_brief + cosineDistance query
+  Then a short package:
+    1. Reuse slate — each asset with WHY it fits (from caption/tags), match as 1-dist.
+    2. Duplicate waste — files and wasted_bytes (human units).
+    3. Archive candidates — extra copies and status='stale' rows; wait for approval.
+    4. Impact heuristic (label it as a heuristic, not a quote):
+       unused reusable b_roll/video ≈ $400 reshoot each;
+       logo/icon/vector_art ≈ $150 relicense;
+       music/sfx ≈ $80.
+  Be concise and practical. Cite MCP SQL results, not guesses.
+"""
 
 
 def build_agent():
-    """Construct the ADK root agent with function tools + ClickHouse MCP toolset."""
+    """Construct the ADK root agent: write function tools + ClickHouse MCP reads."""
     from google.adk.agents import Agent
     from google.adk.tools import FunctionTool
 
-    tools = [
-        FunctionTool(func=ingest_folder),
-        FunctionTool(func=surface_repurposable),
-        FunctionTool(func=list_duplicates),
-        FunctionTool(func=archive_asset),
-        FunctionTool(func=library_stats),
-        FunctionTool(func=find_storage),
-    ]
     mcp = build_clickhouse_mcp_toolset()
-    if mcp is not None:
-        tools.append(mcp)
+    if mcp is None:
+        raise RuntimeError(
+            "ClickHouse MCP toolset is required (USE_CLICKHOUSE_MCP=true and "
+            "mcp-clickhouse installed). Catalog reads must go through the official "
+            "mcp-clickhouse server."
+        )
 
     return Agent(
         name="librarian",
         model=get_settings().gemini_model,
         description="Organizes a creator's media library and surfaces reusable assets.",
-        instruction=_INSTRUCTION,
-        tools=tools,
+        instruction=_instruction(),
+        tools=[
+            FunctionTool(func=ingest_folder),
+            FunctionTool(func=embed_brief),
+            FunctionTool(func=archive_asset),
+            mcp,
+        ],
     )
 
 

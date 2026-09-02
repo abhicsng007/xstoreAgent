@@ -3,7 +3,10 @@ google-cloud-aiplatform[agent_engines,adk]>=1.101.0
 google-genai>=1.0.0
 
 # --- ClickHouse (partner) ---
-clickhouse-connect>=0.8.0
+clickhouse-connect>=0.8.16
+# Official ClickHouse MCP server (hackathon track requirement). Preinstalled so
+# Cloud Run does not depend on a first-request `uvx` download.
+mcp-clickhouse>=0.5.0
 
 # --- MCP (ADK <-> mcp-clickhouse server). Pin <2: ADK 2.8.0 expects the 1.x layout ---
 mcp>=1.8,<2

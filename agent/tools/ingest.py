@@ -17,6 +17,7 @@ two views, no divergence.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from uuid import uuid4
 
 from .. import clickhouse_client as ch
 from .classify import classify_asset
@@ -104,6 +105,7 @@ def ingest_folder_events(
 
         row = a.to_row()
         row.update(
+            id=str(uuid4()),
             asset_type=asset_type,
             asset_subtype=meta.get("asset_subtype", ""),
             project=project,
@@ -122,6 +124,19 @@ def ingest_folder_events(
     try:
         ch.ensure_schema()
         inserted = ch.insert_assets(rows)
+        try:
+            ch.insert_events([
+                {
+                    "asset_id": r["id"],
+                    "event": "ingested",
+                    "project": project,
+                    "bytes": int(r.get("size_bytes", 0) or 0),
+                    "detail": r.get("filename", ""),
+                }
+                for r in rows
+            ])
+        except Exception as exc:  # noqa: BLE001 — catalog write already succeeded
+            print(f"[ingest] asset_events skipped: {exc}")
         yield _step(MEMORY, "done", f"Remembered {inserted} assets",
                     f"{reusable_n} reusable · {stale_n} project-specific now searchable",
                     data={"inserted": inserted})

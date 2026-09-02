@@ -1,24 +1,29 @@
 """xStoreAgent FastAPI server.
 
-Exposes the Librarian's actions as a small REST API for the web dashboard and
-serves the static frontend. The dashboard endpoints call the underlying tool
-functions directly (deterministic, snappy); `/chat` runs the full ADK agent for
-the conversational demo.
+Dashboard endpoints call tool functions directly (deterministic, snappy).
+`/api/chat/stream` runs the ADK Librarian so catalog reads go through the
+official ClickHouse MCP server — the partner path judges will look for.
 
 Run locally:  uvicorn server.app:app --reload
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import mimetypes
 import os
+import re
+from typing import Any
+from uuid import UUID
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from agent import clickhouse_client as ch
+from agent.clickhouse_mcp import mcp_status
+from agent.config import get_settings, sample_assets_path
 from agent.librarian import (
     archive_asset,
     library_stats,
@@ -38,8 +43,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_PREVIEW_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg", ".tif", ".tiff"}
+_ARRAY_RE = re.compile(r"\[[-0-9.eE+,\s]{80,}\]")
 
-# --- Request models ---
+_runner = None
+_runner_lock = asyncio.Lock()
+
+
 class IngestRequest(BaseModel):
     root: str
     project: str = ""
@@ -63,19 +73,82 @@ class ChatRequest(BaseModel):
 
 @app.on_event("startup")
 def _ensure_schema_on_boot() -> None:
-    """Make sure the catalog schema is current (incl. the asset_subtype column)
-    before serving reads, so a dashboard load before the first ingest still works.
-    Best-effort: never block boot if ClickHouse is unreachable."""
+    """Make sure the catalog schema is current before serving reads."""
     try:
         ch.ensure_schema()
     except Exception as exc:  # noqa: BLE001 — don't crash startup on a cold DB
         print(f"[startup] ensure_schema skipped: {exc}")
 
 
+def _clip(value: Any, limit: int = 1600) -> str:
+    """Shorten tool args/results so the live SQL trace stays readable.
+
+    Long embedding arrays become `[… N floats]` — the SELECT itself stays.
+    """
+    if value is None:
+        return ""
+    text = value if isinstance(value, str) else json.dumps(value, default=str)
+    text = _ARRAY_RE.sub(
+        lambda m: f"[… {m.group(0).count(',') + 1} floats]",
+        text,
+    )
+    if len(text) > limit:
+        return text[:limit] + "…"
+    return text
+
+
+def _sse(payload: dict) -> str:
+    return f"data: {json.dumps(payload, default=str)}\n\n"
+
+
+async def _get_runner():
+    """Process-wide ADK runner so MCP stdio and sessions stay warm."""
+    global _runner
+    async with _runner_lock:
+        if _runner is None:
+            from google.adk.runners import InMemoryRunner
+
+            from agent.librarian import build_agent
+
+            _runner = InMemoryRunner(agent=build_agent(), app_name="xstoreagent")
+        return _runner
+
+
+async def _ensure_session(runner, session_id: str) -> None:
+    existing = await runner.session_service.get_session(
+        app_name="xstoreagent", user_id="web", session_id=session_id
+    )
+    if existing is None:
+        await runner.session_service.create_session(
+            app_name="xstoreagent", user_id="web", session_id=session_id
+        )
+
+
 # --- Health ---
 @app.get("/api/health")
 def health() -> dict:
-    return {"ok": True, "service": "xstoreagent"}
+    clickhouse: dict[str, Any] = {"ok": False, "error": "", "database": get_settings().ch_database}
+    try:
+        ch.ping()
+        clickhouse["ok"] = True
+    except Exception as exc:  # noqa: BLE001
+        clickhouse["error"] = str(exc)[:240]
+    mcp = mcp_status()
+    sample = sample_assets_path()
+    sample_ok = os.path.isdir(sample)
+    return {
+        "ok": bool(clickhouse["ok"] and mcp.get("ok")),
+        "service": "xstoreagent",
+        "clickhouse": clickhouse,
+        "mcp": mcp,
+        "sample_assets": {"path": sample, "ok": sample_ok},
+    }
+
+
+@app.get("/api/sample-pack")
+def api_sample_pack() -> dict:
+    path = sample_assets_path()
+    return {"path": path, "ok": os.path.isdir(path)}
 
 
 # --- Ingest ---
@@ -86,27 +159,34 @@ def api_ingest(req: IngestRequest) -> dict:
     return ingest_folder(req.root, project=req.project, limit=req.limit)
 
 
+def _ingest_event_stream(root: str, project: str, limit: int | None):
+    try:
+        for ev in ingest_folder_events(root, project=project, limit=limit):
+            yield _sse(ev)
+    except Exception as exc:  # surface a crash as a final SSE event, not a 500
+        yield _sse({"type": "error", "message": str(exc)[:300]})
+
+
 @app.get("/api/ingest/stream")
 def api_ingest_stream(root: str, project: str = "", limit: int | None = None):
-    """Server-Sent Events: run ingestion and stream the multi-agent reasoning
-    trace (Scanner → Curator → Memory → Archivist) to the dashboard live.
-
-    Uses GET so the browser's native EventSource can consume it. Each event is a
-    JSON `step` (or `start`/`done`/`error`) emitted the moment the pipeline reaches
-    it, so the UI renders the agents thinking in real time.
-    """
+    """Server-Sent Events: ingestion pipeline as a live reasoning trace."""
     if not os.path.isdir(root):
         raise HTTPException(400, f"Not a folder: {root}")
-
-    def event_stream():
-        try:
-            for ev in ingest_folder_events(root, project=project, limit=limit):
-                yield f"data: {json.dumps(ev)}\n\n"
-        except Exception as exc:  # surface a crash as a final SSE event, not a 500
-            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)[:300]})}\n\n"
-
     return StreamingResponse(
-        event_stream(),
+        _ingest_event_stream(root, project, limit),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/ingest/sample/stream")
+def api_ingest_sample_stream(project: str = "demo", limit: int | None = None):
+    """One-click hosted ingest of the bundled sample pack (Cloud Run has no local paths)."""
+    root = sample_assets_path()
+    if not os.path.isdir(root):
+        raise HTTPException(404, f"Sample pack not found at {root}")
+    return StreamingResponse(
+        _ingest_event_stream(root, project, limit),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -125,12 +205,7 @@ def api_assets(
     limit: int = 200,
     sort: str = "reusability",
 ) -> dict:
-    """List catalog assets, each stamped with a 0-100 reusability_score.
-
-    Default `sort=reusability` ranks repurposable assets (logos, icons, B-roll,
-    music) at the top and project-unique ones (voiceovers/dialogue) at the bottom;
-    `sort=newest` keeps the ClickHouse recency order.
-    """
+    """List catalog assets, each stamped with a 0-100 reusability_score."""
     assets = ch.list_assets(asset_type=asset_type, status=status, limit=limit)
     for a in assets:
         a["reusability_score"] = reusability_score(
@@ -143,6 +218,24 @@ def api_assets(
     return {"assets": assets, "reusable_band": REUSABLE_BAND}
 
 
+@app.get("/api/preview/{asset_id}")
+def api_preview(asset_id: str):
+    """Serve an on-disk image for sample-pack cards. 404 if the file isn't here."""
+    try:
+        UUID(asset_id)
+    except ValueError as exc:
+        raise HTTPException(400, "invalid asset id") from exc
+    row = ch.get_asset(asset_id)
+    if not row:
+        raise HTTPException(404, "asset not found")
+    path = row.get("path") or ""
+    ext = (row.get("ext") or os.path.splitext(path)[1] or "").lower()
+    if ext not in _PREVIEW_EXTS or not os.path.isfile(path):
+        raise HTTPException(404, "preview unavailable")
+    mime, _ = mimetypes.guess_type(path)
+    return FileResponse(path, media_type=mime or "application/octet-stream")
+
+
 # --- Storage Scout ---
 @app.get("/api/storage")
 def api_storage() -> dict:
@@ -152,14 +245,13 @@ def api_storage() -> dict:
 
 @app.get("/api/scout/stream")
 def api_scout_stream():
-    """Server-Sent Events: run the Scout — assess storage, then live-search the web
-    for free cloud storage — streaming its reasoning to the dashboard."""
+    """Server-Sent Events: Scout assesses storage and searches for free tiers."""
     def event_stream():
         try:
             for ev in scout_storage_events():
-                yield f"data: {json.dumps(ev)}\n\n"
+                yield _sse(ev)
         except Exception as exc:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)[:300]})}\n\n"
+            yield _sse({"type": "error", "message": str(exc)[:300]})
 
     return StreamingResponse(
         event_stream(),
@@ -171,7 +263,12 @@ def api_scout_stream():
 # --- Repurpose search ---
 @app.post("/api/search")
 def api_search(req: SearchRequest) -> dict:
-    return {"brief": req.brief, "results": surface_repurposable(req.brief, limit=req.limit)}
+    results = surface_repurposable(req.brief, limit=req.limit)
+    try:
+        ch.insert_events([{"event": "searched", "detail": req.brief[:300]}])
+    except Exception as exc:  # noqa: BLE001
+        print(f"[search] event skipped: {exc}")
+    return {"brief": req.brief, "results": results}
 
 
 # --- Review: duplicates + stale ---
@@ -179,6 +276,7 @@ def api_search(req: SearchRequest) -> dict:
 def api_review() -> dict:
     return {
         "duplicates": list_duplicates(),
+        "groups": ch.duplicate_groups(),
         "stale": ch.list_assets(status="stale", limit=200),
     }
 
@@ -190,38 +288,108 @@ def api_approve(req: ApproveRequest) -> dict:
         return archive_asset(req.asset_id)
     if req.action == "keep":
         ch.set_status(req.asset_id, "active")
+        try:
+            ch.insert_events([{"asset_id": req.asset_id, "event": "kept"}])
+        except Exception as exc:  # noqa: BLE001
+            print(f"[approve] event skipped: {exc}")
         return {"asset_id": req.asset_id, "status": "active"}
     raise HTTPException(400, f"Unknown action: {req.action}")
 
 
-# --- Conversational agent (demo) ---
-@app.post("/api/chat")
-async def api_chat(req: ChatRequest) -> dict:
-    """Run the ADK Librarian agent for one user turn. Optional: requires ADK +
-    credentials. Returns the agent's final text response."""
+# --- Conversational agent ---
+def _event_payloads(event) -> list[dict]:
+    payloads: list[dict] = []
+    for fc in event.get_function_calls() or []:
+        payloads.append({
+            "type": "tool",
+            "status": "working",
+            "name": fc.name or "",
+            "args": _clip(getattr(fc, "args", None)),
+        })
+    for fr in event.get_function_responses() or []:
+        payloads.append({
+            "type": "tool",
+            "status": "done",
+            "name": fr.name or "",
+            "result": _clip(getattr(fr, "response", None)),
+        })
+    texts: list[str] = []
+    if event.content and event.content.parts:
+        for part in event.content.parts:
+            if getattr(part, "text", None) and not getattr(part, "function_call", None):
+                texts.append(part.text)
+    if texts:
+        payloads.append({
+            "type": "text",
+            "text": "".join(texts),
+            "final": bool(event.is_final_response()),
+        })
+    return payloads
+
+
+async def _chat_sse(message: str, session_id: str):
+    yield _sse({"type": "start", "session_id": session_id})
     try:
-        from google.adk.runners import InMemoryRunner
         from google.genai import types
 
-        from agent.librarian import build_agent
-
-        runner = InMemoryRunner(agent=build_agent(), app_name="xstoreagent")
-        await runner.session_service.create_session(
-            app_name="xstoreagent", user_id="web", session_id=req.session_id
-        )
-        content = types.Content(role="user", parts=[types.Part.from_text(text=req.message)])
-        reply = ""
+        runner = await _get_runner()
+        await _ensure_session(runner, session_id)
+        content = types.Content(role="user", parts=[types.Part.from_text(text=message)])
         async for event in runner.run_async(
-            user_id="web", session_id=req.session_id, new_message=content
+            user_id="web", session_id=session_id, new_message=content
         ):
+            for payload in _event_payloads(event):
+                yield _sse(payload)
+        yield _sse({"type": "done"})
+    except Exception as exc:  # noqa: BLE001
+        yield _sse({"type": "error", "message": str(exc)[:400]})
+
+
+@app.post("/api/chat/stream")
+async def api_chat_stream(req: ChatRequest):
+    """SSE: Librarian turn with live MCP tool names + SQL."""
+    if not req.message.strip():
+        raise HTTPException(400, "message required")
+    return StreamingResponse(
+        _chat_sse(req.message.strip(), req.session_id or "web"),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/chat")
+async def api_chat(req: ChatRequest) -> dict:
+    """Non-streaming turn (tests / fallback). Same runner as the live trace."""
+    if not req.message.strip():
+        raise HTTPException(400, "message required")
+    try:
+        from google.genai import types
+
+        runner = await _get_runner()
+        await _ensure_session(runner, req.session_id or "web")
+        content = types.Content(
+            role="user", parts=[types.Part.from_text(text=req.message.strip())]
+        )
+        reply = ""
+        tools: list[str] = []
+        async for event in runner.run_async(
+            user_id="web",
+            session_id=req.session_id or "web",
+            new_message=content,
+        ):
+            for fc in event.get_function_calls() or []:
+                if fc.name:
+                    tools.append(fc.name)
             if event.is_final_response() and event.content and event.content.parts:
                 reply = "".join(p.text or "" for p in event.content.parts)
-        return {"reply": reply}
+        return {"reply": reply, "tools": tools}
     except Exception as exc:
-        raise HTTPException(503, f"Agent unavailable: {exc}")
+        raise HTTPException(503, f"Agent unavailable: {exc}") from exc
 
 
 # --- Static frontend (mounted last so /api/* wins) ---
 _WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web")
 if os.path.isdir(_WEB_DIR):
+    from fastapi.staticfiles import StaticFiles
+
     app.mount("/", StaticFiles(directory=_WEB_DIR, html=True), name="web")

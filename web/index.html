@@ -12,17 +12,37 @@
     <span class="logo">🎬</span>
     <div>
       <h1>xStoreAgent</h1>
-      <p>AI Asset Librarian · <span class="partner">ClickHouse</span> × <span class="partner">Gemini</span></p>
+      <p>AI Asset Librarian · <span class="partner">ClickHouse MCP</span> × <span class="partner">Gemini</span></p>
     </div>
   </div>
-  <form id="ingest-form" class="ingest">
-    <input id="ingest-root" type="text" placeholder="/path/to/media/folder" />
+  <div class="ingest">
+    <button type="button" id="ingest-sample">Ingest sample pack</button>
+    <input id="ingest-root" type="text" placeholder="or /path/to/media (local)" />
     <input id="ingest-project" type="text" placeholder="project name (optional)" />
-    <button type="submit">Ingest &amp; Organize</button>
-  </form>
+    <button type="button" id="ingest-folder-btn">Ingest folder</button>
+  </div>
 </header>
+<form id="ingest-form" hidden></form>
 
 <main>
+  <!-- Librarian chat — MCP-first golden path -->
+  <section class="card hero" id="chat-card">
+    <div class="card-head">
+      <h2>Librarian</h2>
+      <div id="mcp-badge" class="muted">ClickHouse MCP</div>
+    </div>
+    <p class="muted">Ask in English. The agent plans, then queries your catalog through the official <code>mcp-clickhouse</code> server — you’ll see <code>list_tables</code> and <code>run_select_query</code> in the trace.</p>
+    <div id="chat-log" class="chat-log"></div>
+    <form id="chat-form" class="chat-form">
+      <input id="chat-input" type="text"
+        placeholder="e.g. What can we reuse for a 30s city product ad?" />
+      <button type="submit">Ask</button>
+    </form>
+    <button type="button" id="golden-prompt" class="ghost golden">
+      Golden prompt — 30s city product ad: reuse, waste, archive
+    </button>
+  </section>
+
   <!-- Live multi-agent reasoning (streams during ingest) -->
   <section class="card reasoning" id="reasoning-card" hidden>
     <div class="card-head">
@@ -34,9 +54,9 @@
   </section>
 
   <!-- Repurpose search -->
-  <section class="card hero">
+  <section class="card">
     <h2>Start a new project</h2>
-    <p class="muted">Describe what you're making — the Librarian surfaces reusable assets from your whole library, across video, images, audio and vectors.</p>
+    <p class="muted">Describe what you're making — the dashboard ranks reusable assets by caption embedding in ClickHouse. For the agentic path, use the Librarian above.</p>
     <form id="search-form" class="search">
       <input id="search-brief" type="text"
         placeholder="e.g. upbeat 30s product ad — city b-roll, brand logo, energetic music bed" />
@@ -62,25 +82,25 @@
     <div id="asset-grid" class="results-grid"></div>
   </section>
 
-  <!-- Storage Scout -->
-  <section class="card" id="storage-card">
-    <div class="card-head">
-      <h2>🛰️ Storage Scout</h2>
-      <button id="scout-btn" class="ghost">Scout free storage</button>
-    </div>
-    <p class="muted">The Scout watches your plan usage and, as space fills up, live-searches the web for free cloud storage to offload to.</p>
-    <div id="storage-meter" class="storage-meter"></div>
-    <div id="scout-results" class="results-grid"></div>
-  </section>
-
   <!-- Review: duplicates + stale -->
   <section class="card">
     <div class="card-head">
       <h2>Reclaim storage</h2>
       <button id="refresh-review" class="ghost">Refresh</button>
     </div>
-    <p class="muted">Duplicate and stale files the Librarian recommends archiving. Nothing is deleted — you approve each action.</p>
+    <p class="muted">Exact duplicates (same content hash) and stale files. Nothing is deleted — you approve each archive.</p>
     <div id="review-list"></div>
+  </section>
+
+  <!-- Storage Scout (optional, not the demo hero) -->
+  <section class="card optional" id="storage-card">
+    <div class="card-head">
+      <h2>🛰️ Storage Scout <span class="opt-tag">optional</span></h2>
+      <button id="scout-btn" class="ghost">Scout free storage</button>
+    </div>
+    <p class="muted">Watches plan usage and can live-search the web for free-tier cloud storage. Not required for the ClickHouse demo.</p>
+    <div id="storage-meter" class="storage-meter"></div>
+    <div id="scout-results" class="results-grid"></div>
   </section>
 </main>
 

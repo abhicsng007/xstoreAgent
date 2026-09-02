@@ -69,11 +69,11 @@ ENV_VARS="${ENV_VARS},TEXT_EMBEDDING_MODEL=${TEXT_EMBEDDING_MODEL:-gemini-embedd
 ENV_VARS="${ENV_VARS},CLICKHOUSE_HOST=${CLICKHOUSE_HOST}"
 ENV_VARS="${ENV_VARS},CLICKHOUSE_PORT=${CLICKHOUSE_PORT:-8443}"
 ENV_VARS="${ENV_VARS},CLICKHOUSE_USER=${CLICKHOUSE_USER:-default}"
-ENV_VARS="${ENV_VARS},CLICKHOUSE_DATABASE=${CLICKHOUSE_DATABASE:-xstoreagent}"
+ENV_VARS="${ENV_VARS},CLICKHOUSE_DATABASE=${CLICKHOUSE_DATABASE:-xstoreAgent}"
 ENV_VARS="${ENV_VARS},CLICKHOUSE_SECURE=${CLICKHOUSE_SECURE:-true}"
-# MCP off in the hosted service for stability (function tools cover all endpoints);
-# flip to true if you want the agent to call the ClickHouse MCP server live.
-ENV_VARS="${ENV_VARS},USE_CLICKHOUSE_MCP=${USE_CLICKHOUSE_MCP:-false}"
+# Official mcp-clickhouse must be on for the ClickHouse track (eligibility).
+ENV_VARS="${ENV_VARS},USE_CLICKHOUSE_MCP=${USE_CLICKHOUSE_MCP:-true}"
+ENV_VARS="${ENV_VARS},SAMPLE_ASSETS_DIR=/app/sample_assets"
 
 echo "==> Deploying to Cloud Run (this builds the container; ~3-5 min)..."
 gcloud run deploy "$SERVICE" \

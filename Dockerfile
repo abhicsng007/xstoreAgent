@@ -7,11 +7,15 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# uv/uvx so the ClickHouse MCP server (`uvx mcp-clickhouse`) is available at runtime
+# uv/uvx as fallback; mcp-clickhouse is also pip-installed (see requirements.txt)
 RUN pip install --no-cache-dir uv
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && python -c "import mcp_clickhouse"
+
+ENV USE_CLICKHOUSE_MCP=true \
+    SAMPLE_ASSETS_DIR=/app/sample_assets
 
 COPY agent ./agent
 COPY server ./server

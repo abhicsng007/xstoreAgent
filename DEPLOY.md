@@ -68,7 +68,7 @@ gcloud run deploy xstoreagent `
   --service-account xstoreagent-run@xstoreagent.iam.gserviceaccount.com `
   --allow-unauthenticated `
   --memory 2Gi --cpu 2 --timeout 900 `
-  --set-env-vars "GOOGLE_CLOUD_PROJECT=xstoreagent,GOOGLE_CLOUD_LOCATION=global,EMBEDDING_LOCATION=us-central1,GOOGLE_GENAI_USE_VERTEXAI=true,GEMINI_MODEL=gemini-3.7-flash,MULTIMODAL_EMBEDDING_MODEL=multimodalembedding@001,TEXT_EMBEDDING_MODEL=gemini-embedding-001,CLICKHOUSE_HOST=YOUR_HOST.clickhouse.cloud,CLICKHOUSE_PORT=8443,CLICKHOUSE_USER=default,CLICKHOUSE_DATABASE=xstoreAgent,CLICKHOUSE_SECURE=true,USE_CLICKHOUSE_MCP=false" `
+  --set-env-vars "GOOGLE_CLOUD_PROJECT=xstoreagent,GOOGLE_CLOUD_LOCATION=global,EMBEDDING_LOCATION=us-central1,GOOGLE_GENAI_USE_VERTEXAI=true,GEMINI_MODEL=gemini-3.7-flash,MULTIMODAL_EMBEDDING_MODEL=multimodalembedding@001,TEXT_EMBEDDING_MODEL=gemini-embedding-001,CLICKHOUSE_HOST=YOUR_HOST.clickhouse.cloud,CLICKHOUSE_PORT=8443,CLICKHOUSE_USER=default,CLICKHOUSE_DATABASE=xstoreAgent,CLICKHOUSE_SECURE=true,USE_CLICKHOUSE_MCP=true,SAMPLE_ASSETS_DIR=/app/sample_assets" `
   --set-secrets "CLICKHOUSE_PASSWORD=clickhouse-password:latest"
 ```
 
@@ -76,8 +76,22 @@ gcloud run deploy xstoreagent `
 ```powershell
 gcloud run services describe xstoreagent --region us-central1 --format="value(status.url)"
 ```
-Open the URL, then check `/<url>/api/health` → `{"ok":true,...}`. The library and
-search should load from your ClickHouse data immediately.
+Open the URL, then check `/<url>/api/health` → `ok`, `clickhouse.ok`, and `mcp.ok`
+must all be true (ClickHouse track eligibility). The library and search load from
+your ClickHouse data immediately.
+
+Pre-load the sample pack so a judge never sees an empty library:
+
+```bash
+python scripts/reset_library.py --yes --ingest sample_assets --project demo
+```
+
+That writes to the same ClickHouse the service uses (your `.env`). Then click
+**Golden prompt** on the hosted URL — the Librarian should call `list_tables` and
+`run_select_query` via mcp-clickhouse.
+
+ClickHouse Cloud trial credits last 30 days. Extend the service so it stays up
+through judging (10 Sep–8 Oct 2026).
 
 ---
 
@@ -92,6 +106,8 @@ search should load from your ClickHouse data immediately.
 - **429 / quota during ingest on the hosted app:** the app retries with backoff;
   for a large ingest, prefer running `python scripts/smoke_test.py` locally against
   the same ClickHouse so the hosted app just serves the catalog.
-- **ClickHouse MCP live in the agent:** set `USE_CLICKHOUSE_MCP=true` (the image
-  ships `uv`/`uvx`). Left off by default for hosted stability; all dashboard
-  endpoints use the direct ClickHouse client regardless.
+- **ClickHouse MCP is on by default.** The image preinstalls `mcp-clickhouse` and
+  sets `USE_CLICKHOUSE_MCP=true`. Do not flip this off for the hackathon deploy —
+  catalog chat must go through the official MCP server. Dashboard REST still uses
+  `clickhouse-connect` for snappy grids. If `/api/health` shows `mcp.ok: false`,
+  the agent chat will 503 until the package/env is fixed.

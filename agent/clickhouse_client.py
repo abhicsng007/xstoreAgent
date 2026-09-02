@@ -1,14 +1,15 @@
 """ClickHouse data layer for xStoreAgent (partner integration).
 
-This is the direct `clickhouse-connect` client used by the FastAPI server and as
-the fallback behind the ClickHouse MCP toolset. It owns the `assets` catalog:
-schema provisioning, inserts, vector (repurpose) search via cosineDistance, and
-near-duplicate detection.
+Direct `clickhouse-connect` client used by the FastAPI dashboard and for writes
+(ingest / archive). Catalog *reads* from the Librarian agent go through the
+official `mcp-clickhouse` server — this module is the write path and the
+deterministic UI path, not the agent's query path.
 """
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
 import clickhouse_connect
 from clickhouse_connect.driver.client import Client
@@ -29,10 +30,13 @@ def _as_datetime(value: Any) -> datetime:
     return datetime.now()
 
 _ASSETS_COLUMNS = [
-    "path", "filename", "asset_type", "asset_subtype", "ext", "size_bytes",
+    "id", "path", "filename", "asset_type", "asset_subtype", "ext", "size_bytes",
     "created_at", "project", "caption", "tags", "reusable", "status",
     "content_hash", "embedding",
 ]
+
+_EVENT_COLUMNS = ["asset_id", "event", "project", "bytes", "detail"]
+_BRIEF_COLUMNS = ["brief", "embedding"]
 
 
 def get_client(database: str | None = None) -> Client:
@@ -83,6 +87,31 @@ def ensure_schema(client: Client | None = None) -> None:
         f"ALTER TABLE {s.ch_database}.assets "
         f"ADD COLUMN IF NOT EXISTS asset_subtype LowCardinality(String) DEFAULT ''"
     )
+    client.command(
+        f"""
+        CREATE TABLE IF NOT EXISTS {s.ch_database}.asset_events
+        (
+            ts DateTime DEFAULT now(),
+            asset_id UUID,
+            event LowCardinality(String),
+            project String DEFAULT '',
+            bytes UInt64 DEFAULT 0,
+            detail String DEFAULT ''
+        )
+        ENGINE = MergeTree ORDER BY (event, ts)
+        """
+    )
+    client.command(
+        f"""
+        CREATE TABLE IF NOT EXISTS {s.ch_database}.brief_queries
+        (
+            ts DateTime DEFAULT now(),
+            brief String,
+            embedding Array(Float32)
+        )
+        ENGINE = MergeTree ORDER BY ts
+        """
+    )
 
 
 def insert_assets(rows: list[dict[str, Any]], client: Client | None = None) -> int:
@@ -94,6 +123,7 @@ def insert_assets(rows: list[dict[str, Any]], client: Client | None = None) -> i
     data = []
     for r in rows:
         data.append([
+            r.get("id") or str(uuid4()),
             r.get("path", ""),
             r.get("filename", ""),
             r.get("asset_type", "other"),
@@ -141,38 +171,68 @@ def repurpose_search(
     return [dict(zip(result.column_names, row)) for row in result.result_rows]
 
 
+def duplicate_groups(client: Client | None = None) -> list[dict[str, Any]]:
+    """Exact duplicates via GROUP BY content_hash (ClickHouse-idiomatic, not CROSS JOIN).
+
+    `wasted_bytes` is reclaimable storage if every extra copy is archived
+    (sum(size) - max(size) for the group).
+    """
+    client = client or get_client()
+    result = client.query(
+        """
+        SELECT content_hash,
+               groupArray(toString(id)) AS ids,
+               groupArray(filename) AS files,
+               groupArray(size_bytes) AS sizes,
+               any(asset_type) AS asset_type,
+               count() AS n,
+               sum(size_bytes) - max(size_bytes) AS wasted_bytes
+        FROM assets
+        WHERE content_hash != '' AND status != 'archived'
+        GROUP BY content_hash
+        HAVING n > 1
+        ORDER BY wasted_bytes DESC
+        """
+    )
+    return [dict(zip(result.column_names, row)) for row in result.result_rows]
+
+
 def find_duplicates(
     threshold: float | None = None, client: Client | None = None
 ) -> list[dict[str, Any]]:
-    """Find duplicate asset pairs (exact + near) so the user can reclaim storage.
+    """Duplicate pairs for the dashboard review list.
 
-    Two independent passes, merged and de-duped:
-      1. Exact duplicates — assets sharing a content_hash (works for any type,
-         including media we couldn't embed). Distance reported as 0.
-      2. Near-duplicates — same-type pairs whose embeddings are within `threshold`
-         cosine distance. Only assets that actually embedded participate (via the
-         `embedded` CTE), so cosineDistance never sees mismatched array sizes.
-
-    The agent proposes archiving one member of each pair; a human approves.
+    Exact copies come from `duplicate_groups` (hash GROUP BY), expanded into
+    pairs so the existing Archive button still has an `id_b`. Near-duplicates
+    (same type, embedding cosine under the threshold) are a secondary pass.
     """
     client = client or get_client()
     thr = threshold if threshold is not None else get_settings().dup_distance_threshold
 
-    # Pass 1: exact content-hash duplicates.
-    exact = client.query(
-        """
-        SELECT a.id AS id_a, a.filename AS file_a,
-               b.id AS id_b, b.filename AS file_b,
-               a.asset_type AS asset_type, 0.0 AS distance
-        FROM assets AS a
-        CROSS JOIN assets AS b
-        WHERE a.id < b.id AND a.content_hash = b.content_hash
-          AND a.content_hash != ''
-          AND a.status != 'archived' AND b.status != 'archived'
-        """
-    )
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for g in duplicate_groups(client=client):
+        ids = [str(x) for x in (g.get("ids") or [])]
+        files = list(g.get("files") or [])
+        if len(ids) < 2:
+            continue
+        keep_id, keep_name = ids[0], files[0] if files else ids[0]
+        for i, extra_id in enumerate(ids[1:], start=1):
+            key = (keep_id, extra_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({
+                "id_a": keep_id,
+                "file_a": keep_name,
+                "id_b": extra_id,
+                "file_b": files[i] if i < len(files) else extra_id,
+                "asset_type": g.get("asset_type", ""),
+                "distance": 0.0,
+                "wasted_bytes": int(g.get("wasted_bytes") or 0),
+                "kind": "exact",
+            })
 
-    # Pass 2: near-duplicate embeddings (all rows here have length == EMBED_DIM).
     near = client.query(
         """
         WITH embedded AS (
@@ -180,8 +240,8 @@ def find_duplicates(
             FROM assets
             WHERE status != 'archived' AND length(embedding) > 0
         )
-        SELECT a.id AS id_a, a.filename AS file_a,
-               b.id AS id_b, b.filename AS file_b,
+        SELECT toString(a.id) AS id_a, a.filename AS file_a,
+               toString(b.id) AS id_b, b.filename AS file_b,
                a.asset_type AS asset_type,
                cosineDistance(a.embedding, b.embedding) AS distance
         FROM embedded AS a
@@ -190,21 +250,20 @@ def find_duplicates(
           AND length(a.embedding) = length(b.embedding)
           AND cosineDistance(a.embedding, b.embedding) < {thr:Float64}
         ORDER BY distance ASC
+        LIMIT 50
         """,
         parameters={"thr": thr},
     )
-
-    seen: set[tuple[str, str]] = set()
-    out: list[dict[str, Any]] = []
-    for result in (exact, near):
-        for row in result.result_rows:
-            d = dict(zip(result.column_names, row))
-            key = (str(d["id_a"]), str(d["id_b"]))
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(d)
-    out.sort(key=lambda d: d["distance"])
+    for row in near.result_rows:
+        d = dict(zip(near.column_names, row))
+        key = (str(d["id_a"]), str(d["id_b"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        d["kind"] = "near"
+        d["wasted_bytes"] = 0
+        out.append(d)
+    out.sort(key=lambda d: (0 if d.get("kind") == "exact" else 1, d["distance"]))
     return out
 
 
@@ -270,3 +329,62 @@ def library_overview(client: Client | None = None) -> list[dict[str, Any]]:
         """
     )
     return [dict(zip(result.column_names, row)) for row in result.result_rows]
+
+
+def ping() -> bool:
+    """True when ClickHouse accepts a trivial query."""
+    get_client(database="default").command("SELECT 1")
+    return True
+
+
+def get_asset(asset_id: str, client: Client | None = None) -> dict[str, Any] | None:
+    """Fetch one catalog row (including source path) for previews."""
+    client = client or get_client()
+    result = client.query(
+        """
+        SELECT toString(id) AS id, path, filename, asset_type, ext,
+               size_bytes, caption, tags, reusable, status
+        FROM assets
+        WHERE toString(id) = {id:String}
+        LIMIT 1
+        """,
+        parameters={"id": str(asset_id)},
+    )
+    if not result.result_rows:
+        return None
+    return dict(zip(result.column_names, result.result_rows[0]))
+
+
+def insert_events(rows: list[dict[str, Any]], client: Client | None = None) -> int:
+    """Append lifecycle facts (ingested / searched / archived / kept) for analytics."""
+    if not rows:
+        return 0
+    client = client or get_client()
+    data = []
+    for r in rows:
+        aid = r.get("asset_id") or "00000000-0000-0000-0000-000000000000"
+        data.append([
+            str(aid),
+            r.get("event", "ingested"),
+            r.get("project", ""),
+            int(r.get("bytes", 0) or 0),
+            str(r.get("detail", "") or "")[:500],
+        ])
+    client.insert(
+        table="asset_events",
+        data=data,
+        column_names=_EVENT_COLUMNS,
+        database=get_settings().ch_database,
+    )
+    return len(data)
+
+
+def insert_brief(brief: str, embedding: list[float], client: Client | None = None) -> None:
+    """Store a project-brief embedding so MCP SQL can JOIN it (no giant literals)."""
+    client = client or get_client()
+    client.insert(
+        table="brief_queries",
+        data=[[brief[:2000], [float(x) for x in embedding]]],
+        column_names=_BRIEF_COLUMNS,
+        database=get_settings().ch_database,
+    )

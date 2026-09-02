@@ -1,93 +1,72 @@
 # xStoreAgent — 3-minute demo script & storyboard
 
 Target: ≤ 3:00, English (or English subtitles). Public on YouTube/Vimeo.
-Judging maps to: **Tech implementation · Design · Impact · Idea.** Hit all four —
-and because this is *Agentic Cinema*, make the agent's reasoning **visible**: the
-live multi-agent crew and the Scout's web search are the beats that read as
-"agentic," so give them screen time.
+Show the **running product**, not a cinematic trailer. Hit all four judging
+axes (Tech · Design · Impact · Idea). The ClickHouse-judge money shot is the
+Librarian calling **mcp-clickhouse** (`list_tables` / `run_select_query`) with
+SQL on screen.
 
-Before recording: `python scripts/reset_library.py --yes` for a clean start, then
-run the ingest live on camera (the reasoning stream is the point). Re-run the
-reset+ingest until the Gemini verdicts land how you like.
+Before recording:
+1. `python scripts/reset_library.py --yes --ingest sample_assets --project demo`
+2. Confirm `/api/health` → `mcp.ok` and `clickhouse.ok`
+3. Dry-run the golden prompt once so you know the SQL lands
+4. Redeploy if you changed code: `bash scripts/deploy.sh`
+5. Record on the **hosted URL** (the URL judges will click)
+
+Do **not** show Storage Scout.
 
 ---
 
-### 0:00–0:18 · The problem (hook)
-> "Every production team has a graveyard of hard drives — B-roll, logos, SFX,
-> music, VFX plates — from projects nobody remembers. So they re-shoot and
-> re-license things they already own, and pay to store duplicates forever."
+### 0:00–0:15 · The problem
+> "Every production has a graveyard of drives — B-roll, logos, SFX — from
+> projects nobody remembers. Teams re-shoot and re-license things they already
+> own, and pay to store the duplicates."
 
-**On screen:** a messy folder of mixed media files.
+**On screen:** messy `sample_assets` folder (or the empty-library CTA).
 
-### 0:18–0:50 · Ingest — watch the agent crew think (the agentic centerpiece)
-- Paste a folder path → **Ingest & Organize**.
-- Narrate: *"xStoreAgent isn't a black box. Watch its crew work in real time."*
-- **On screen:** the live reasoning console — the crew strip lighting up as work
-  hands off, color-coded steps streaming:
-  - **Scanner 🔍** segregates every file by type (video/image/icon/vector/audio).
-  - **Curator 🎬** captions each asset with Gemini and judges *reusable vs
-    project-specific*, with its reasoning shown per file.
-  - **Memory 🧠** embeds each caption and writes it to ClickHouse.
-  - **Archivist 🗄️** flags duplicates and stale files for review.
-- Let 2–3 real steps play out on camera — this is the "agentic" money shot.
+### 0:15–0:40 · Ingest (keep it short)
+- Click **Ingest sample pack** (or jump in if the library is already loaded).
+- 10–15 seconds of the crew trace is enough: Curator captions with Gemini,
+  Memory writes to ClickHouse.
+- Narrate: *"Gemini captions each asset. ClickHouse is the library's memory."*
 
-### 0:50–1:08 · The partner: ClickHouse as the library's memory
-- Narrate: *"Every asset — metadata AND a multimodal embedding — lands in
-  ClickHouse. That's the library's long-term memory."*
-- **On screen:** the Memory step committing to ClickHouse; optionally cut to a
-  quick console query (`SELECT asset_type, count() FROM assets GROUP BY asset_type`)
-  or the ClickHouse MCP toolset call in the ADK trace. Emphasize the partner.
+If the library is pre-loaded, skip live ingest and show the ranked grid instead.
 
-### 1:08–1:35 · Sorted by reusability (a line straight from the idea)
-- Narrate: *"The library ranks itself by reusability — what you can repurpose sits
-  on top; what belongs to one video sinks to the bottom."*
-- **On screen:** the **♻️ Repurposable** band (logos 96, icons 93, B-roll, music
-  beds) with green reuse meters; scroll to the **📌 Project-specific** band where
-  `voiceover_host_scene4.wav` ranks dead last (12/100, dialogue). Toggle
-  **By reusability / Newest** once to show the sort is live.
+### 0:40–0:55 · Reusability (the idea)
+- Library sorted **By reusability**: logos/icons/B-roll on top, dialogue last.
+> "What you can steal for the next video sits above what belongs to one shoot."
 
-### 1:35–2:08 · The magic: repurpose search (the cross-modal "wow")
-- Type a new brief: *"upbeat 30-second product ad — city b-roll, brand logo,
-  energetic music bed."* → **Surface reusable assets**.
-- **On screen:** ranked results with % match — a *video* clip, a *logo vector*,
-  and a *music* file all surface from a *text* brief.
-- Narrate: *"Images, video, audio and text share one embedding space, so a text
-  brief retrieves the right clip — a ClickHouse `cosineDistance` vector search."*
+### 0:55–2:25 · Golden path — Librarian + MCP SQL  ★ hero
+- Click **Golden prompt — 30s city product ad: reuse, waste, archive**
+- Narrate: *"The agent doesn't guess. It plans, then queries ClickHouse through
+  the official MCP server."*
+- **On screen, linger on the trace:**
+  - `MCP · list_tables`
+  - `MCP · run_select_query` with the rollup / `GROUP BY content_hash` waste query
+  - `embed_brief` then `cosineDistance` SELECT (vector array may be truncated — that's fine)
+- Read the package out loud as it appears:
+  1. Reuse slate (city b-roll, logo, music) and *why*
+  2. Duplicate waste in bytes
+  3. Archive candidates — "it waits for me to approve"
+- Optional: click **Archive duplicate** on one pair.
 
-### 2:08–2:35 · The Storage Scout searches the web (second agentic beat)
-- Narrate: *"As the library grows and your storage plan fills, a Scout agent goes
-  and finds you room."* → click **Scout free storage**.
-- **On screen:** the Scout's reasoning streams — *assesses usage → runs a live
-  Google Search → surfaces ranked free-tier providers.* Point out the **actual
-  search queries** in the trace (proof it hit the web) and the provider cards
-  (MEGA 20 GB, Drive 15 GB…) tagged **web**.
-- *(Optional: set `STORAGE_PLAN_GB` small in `.env` beforehand so the meter shows
-  "approaching the cap" and the Scout reads as reactive.)*
+### 2:25–2:45 · Impact
+> "That's hours of hunting and a reshoot you didn't need. Heuristic: unused
+> reusable B-roll is hundreds of dollars each. The catalog is live in ClickHouse
+> Cloud; the agent speaks SQL."
 
-### 2:35–2:48 · Reclaim storage (human-in-the-loop)
-- Narrate: *"It flags duplicates and project-specific junk — but never deletes.
-  You approve."* Click **Archive** on a duplicate; watch it drop from the library.
+**On screen:** tidy library + chat package.
 
-### 2:48–2:58 · Impact + close
-> "xStoreAgent turns a creator's dead archive into a living, searchable library —
-> less re-shooting, less re-licensing, less wasted storage. An asset librarian
-> that actually reasons out loud."
-- **On screen:** the tidy, reusability-ranked library. Mention: built with
-  Gemini + Google ADK on Cloud Run, powered by ClickHouse.
-
-### 2:58–3:00 · Card
-- Hosted URL · GitHub repo · "ClickHouse track".
+### 2:45–3:00 · Card
+Hosted URL · GitHub · **ClickHouse track** · Gemini + ADK + mcp-clickhouse.
 
 ---
 
 ## Shot checklist
-- [ ] `python scripts/reset_library.py --yes` then ingest `sample_assets` **live**
-      on camera (the reasoning stream is the hero shot)
-- [ ] Confirm the reusability bands look right (logos/icons top, voiceover bottom);
-      re-run reset+ingest if a stock still lands in the wrong band
-- [ ] Run `scripts/smoke_test.py` beforehand so live repurpose search returns good matches
-- [ ] Pre-run the Scout once so you know the live queries return cleanly on the day
-- [ ] Have one ClickHouse query / ADK trace ready to show the partner integration
-- [ ] **Redeploy first:** `bash scripts/deploy.sh` — the hosted URL must run the
-      current build (reasoning stream + reusability view + Scout)
-- [ ] Record at 1080p+, steady cursor, captions on
+- [ ] Hosted `/api/health` shows `mcp.ok: true`
+- [ ] Golden prompt shows **MCP** tool chips (not only function tools)
+- [ ] SQL `GROUP BY content_hash` or `cosineDistance` visible
+- [ ] Sample library has duplicates (`city_broll_01` + copy, skyline dup)
+- [ ] No Scout in the cut
+- [ ] 1080p+, steady cursor, captions on
+- [ ] First 3 minutes only — Devpost truncates after that
