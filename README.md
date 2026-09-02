@@ -68,6 +68,13 @@ python agent/tools/scan.py sample_assets
 uvicorn server.app:app --reload
 ```
 
+### 5. Deploy to Cloud Run
+One command (reads your `.env`), or follow the manual steps — see
+[`DEPLOY.md`](DEPLOY.md):
+```bash
+bash scripts/deploy.sh
+```
+
 ## Repo layout
 | Path | Purpose |
 |------|---------|
