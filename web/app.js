@@ -19,6 +19,78 @@ const fmtBytes = (b) => {
   return `${(b / 1024 ** i).toFixed(1)} ${u[i]}`;
 };
 
+const escapeHtml = (s) =>
+  String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+// Minimal Markdown -> HTML for the Librarian's final answer (headings, bold,
+// italic, inline code, lists, tables, rules). The source is HTML-escaped first,
+// so no raw markup from the model reaches the DOM.
+function renderMarkdown(src) {
+  const lines = escapeHtml(String(src).trim()).split(/\r?\n/);
+  const inline = (t) =>
+    t
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>")
+      .replace(/`([^`]+)`/g, "<code>$1</code>");
+  const isTableSep = (l) =>
+    /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/.test(l);
+  const splitRow = (l) =>
+    l.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map((c) => c.trim());
+  const isBlockStart = (l, j) =>
+    /^\s*(#{1,6})\s+/.test(l) || /^\s*[-*]\s+/.test(l) ||
+    /^\s*\d+\.\s+/.test(l) || /^\s*---+\s*$/.test(l) ||
+    (l.includes("|") && j + 1 < lines.length && isTableSep(lines[j + 1]));
+
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { i++; continue; }
+
+    if (/^\s*---+\s*$/.test(line)) { out.push("<hr>"); i++; continue; }
+
+    const h = line.match(/^\s*(#{1,6})\s+(.*)$/);
+    if (h) { out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); i++; continue; }
+
+    if (line.includes("|") && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+      const th = splitRow(line).map((c) => `<th>${inline(c)}</th>`).join("");
+      i += 2;
+      const trs = [];
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim()) {
+        trs.push(`<tr>${splitRow(lines[i]).map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`);
+        i++;
+      }
+      out.push(`<table><thead><tr>${th}</tr></thead><tbody>${trs.join("")}</tbody></table>`);
+      continue;
+    }
+
+    if (/^\s*[-*]\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+        items.push(`<li>${inline(lines[i].replace(/^\s*[-*]\s+/, ""))}</li>`); i++;
+      }
+      out.push(`<ul>${items.join("")}</ul>`);
+      continue;
+    }
+
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+        items.push(`<li>${inline(lines[i].replace(/^\s*\d+\.\s+/, ""))}</li>`); i++;
+      }
+      out.push(`<ol>${items.join("")}</ol>`);
+      continue;
+    }
+
+    const para = [];
+    while (i < lines.length && lines[i].trim() && !isBlockStart(lines[i], i)) {
+      para.push(lines[i]); i++;
+    }
+    out.push(`<p>${inline(para.join("<br>"))}</p>`);
+  }
+  return out.join("");
+}
+
 async function api(path, opts) {
   const res = await fetch(API + path, {
     headers: { "Content-Type": "application/json" },
@@ -341,9 +413,9 @@ async function runChat(message) {
       if (ev.type === "text" && ev.text) {
         wait.remove();
         if (!replyEl || ev.final) {
-          replyEl = chatAppend(`<div class="bubble agent"></div>`, "from-agent");
+          replyEl = chatAppend(`<div class="bubble agent md"></div>`, "from-agent");
         }
-        replyEl.querySelector(".bubble").textContent = ev.text;
+        replyEl.querySelector(".bubble").innerHTML = renderMarkdown(ev.text);
       }
       if (ev.type === "error") {
         wait.remove();

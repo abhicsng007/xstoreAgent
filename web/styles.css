@@ -257,6 +257,34 @@ button.danger { background: var(--danger); color: #2a0000; }
 .bubble.agent { background: rgba(255,207,92,.08); border-color: var(--accent); }
 .bubble.sys, .bubble.err { color: var(--muted); font-size: 13px; }
 .bubble.err { color: var(--danger); }
+
+/* Rendered Markdown for the Librarian's final answer */
+.bubble.md { white-space: normal; }
+.bubble.md > :first-child { margin-top: 0; }
+.bubble.md > :last-child { margin-bottom: 0; }
+.bubble.md h1, .bubble.md h2, .bubble.md h3,
+.bubble.md h4, .bubble.md h5, .bubble.md h6 {
+  margin: 12px 0 6px; line-height: 1.25; font-weight: 700;
+}
+.bubble.md h1 { font-size: 17px; }
+.bubble.md h2 { font-size: 16px; }
+.bubble.md h3 { font-size: 14.5px; color: var(--accent); }
+.bubble.md h4, .bubble.md h5, .bubble.md h6 { font-size: 13.5px; color: var(--muted); }
+.bubble.md p { margin: 6px 0; }
+.bubble.md ul, .bubble.md ol { margin: 6px 0; padding-left: 20px; }
+.bubble.md li { margin: 2px 0; }
+.bubble.md hr { border: none; border-top: 1px solid var(--line); margin: 12px 0; }
+.bubble.md code {
+  background: rgba(92,200,255,.10); padding: 1px 5px; border-radius: 5px;
+}
+.bubble.md table {
+  border-collapse: collapse; width: 100%; margin: 8px 0;
+  font-size: 13px; display: block; overflow-x: auto;
+}
+.bubble.md th, .bubble.md td {
+  border: 1px solid var(--line); padding: 5px 9px; text-align: left;
+}
+.bubble.md th { background: rgba(255,255,255,.04); font-weight: 700; }
 .chat-form { display: flex; gap: 8px; flex-wrap: wrap; }
 .chat-form input { flex: 1; }
 button.golden {
