@@ -29,6 +29,8 @@ function toast(msg, ms = 3200) {
   toast._t = setTimeout(() => (t.hidden = true), ms);
 }
 
+let reusableBand = 50; // divider between repurposable and project-specific (from API)
+
 function assetCard(a, { showScore = false } = {}) {
   const icon = TYPE_ICON[a.asset_type] || "📦";
   const tags = (a.tags || []).slice(0, 5).map((t) => `<span class="tag">${t}</span>`).join("");
@@ -37,11 +39,21 @@ function assetCard(a, { showScore = false } = {}) {
     : `<span class="badge stale">stale</span>`;
   const score = showScore && a.match_score != null
     ? `<span class="score">${a.match_score}% match</span>` : "";
+  const rs = a.reusability_score;
+  const meter = rs != null ? `
+    <div class="reuse-meter">
+      <div class="track"><div class="fill ${rs >= reusableBand ? "hi" : "lo"}" style="width:${rs}%"></div></div>
+      <span class="rs">${rs}/100 reuse</span>
+    </div>` : "";
+  const subtype = a.asset_subtype
+    ? `<div class="subtype">${a.asset_subtype.replace(/_/g, " ")}</div>` : "";
   return `<div class="asset">
       <div class="icon">${icon}</div>
       <div class="name">${a.filename || ""}</div>
       <div class="cap">${a.caption || "<em>uncaptioned</em>"}</div>
+      ${subtype}
       <div class="tags">${tags}</div>
+      ${meter}
       <div class="foot">${badge}${score}</div>
     </div>`;
 }
@@ -74,13 +86,50 @@ async function loadLibrary() {
   loadAssets();
 }
 
+let sortMode = "reusability"; // reusability | newest
+
 async function loadAssets() {
-  const q = activeType ? `?asset_type=${encodeURIComponent(activeType)}` : "";
-  const { assets } = await api("/api/assets" + q);
-  document.getElementById("asset-grid").innerHTML =
-    assets.map((a) => assetCard(a)).join("") ||
-    `<div class="empty">No assets${activeType ? " of this type" : ""} yet.</div>`;
+  const params = new URLSearchParams({ sort: sortMode });
+  if (activeType) params.set("asset_type", activeType);
+  const resp = await api("/api/assets?" + params.toString());
+  const assets = resp.assets;
+  if (resp.reusable_band != null) reusableBand = resp.reusable_band;
+
+  const grid = document.getElementById("asset-grid");
+  if (!assets.length) {
+    grid.innerHTML = `<div class="empty">No assets${activeType ? " of this type" : ""} yet.</div>`;
+    return;
+  }
+
+  // In reusability order, split the grid into a repurposable band and a
+  // project-specific band with labelled dividers; otherwise a flat grid.
+  if (sortMode === "reusability") {
+    const hi = assets.filter((a) => (a.reusability_score ?? 0) >= reusableBand);
+    const lo = assets.filter((a) => (a.reusability_score ?? 0) < reusableBand);
+    const parts = [];
+    if (hi.length) {
+      parts.push(`<div class="band-label reuse">♻️ Repurposable · reuse across projects</div>`);
+      parts.push(hi.map((a) => assetCard(a)).join(""));
+    }
+    if (lo.length) {
+      parts.push(`<div class="band-label unique">📌 Project-specific · unique to one video</div>`);
+      parts.push(lo.map((a) => assetCard(a)).join(""));
+    }
+    grid.innerHTML = parts.join("");
+  } else {
+    grid.innerHTML = assets.map((a) => assetCard(a)).join("");
+  }
 }
+
+// Sort toggle (By reusability | Newest)
+document.getElementById("sort-toggle").addEventListener("click", (e) => {
+  const btn = e.target.closest(".seg");
+  if (!btn || btn.dataset.sort === sortMode) return;
+  sortMode = btn.dataset.sort;
+  document.querySelectorAll("#sort-toggle .seg").forEach((s) =>
+    s.classList.toggle("active", s.dataset.sort === sortMode));
+  loadAssets();
+});
 
 // --- Repurpose search ---
 document.getElementById("search-form").onsubmit = async (e) => {

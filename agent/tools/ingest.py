@@ -105,6 +105,7 @@ def ingest_folder_events(
         row = a.to_row()
         row.update(
             asset_type=asset_type,
+            asset_subtype=meta.get("asset_subtype", ""),
             project=project,
             caption=caption,
             tags=list({*a.tags, *meta.get("tags", [])}),

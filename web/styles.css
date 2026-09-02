@@ -177,3 +177,36 @@ button.danger { background: var(--danger); color: #2a0000; }
 
 .rstep.summary { border-left-color: var(--accent); background: rgba(255,207,92,.06); }
 .rstep.summary .rtitle { color: var(--accent); }
+
+/* --- Reusability-ranked library --- */
+.head-right { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.sort-toggle {
+  display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden;
+}
+.sort-toggle .seg {
+  background: var(--panel-2); color: var(--muted); border: none; border-radius: 0;
+  padding: 6px 14px; font-size: 12.5px; font-weight: 600;
+}
+.sort-toggle .seg.active { background: var(--accent); color: #1a1400; }
+.sort-toggle .seg:hover { filter: none; color: var(--text); }
+.sort-toggle .seg.active:hover { color: #1a1400; }
+
+/* Full-width band label that breaks the grid flow between reusability tiers. */
+.band-label {
+  grid-column: 1 / -1; display: flex; align-items: center; gap: 10px;
+  margin: 6px 0 2px; color: var(--muted); font-size: 12px; font-weight: 600;
+  letter-spacing: .3px; text-transform: uppercase;
+}
+.band-label::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.band-label.reuse { color: var(--good); }
+.band-label.unique { color: var(--warn); }
+
+.asset .reuse-meter { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+.asset .reuse-meter .track {
+  flex: 1; height: 6px; border-radius: 999px; background: #222a38; overflow: hidden;
+}
+.asset .reuse-meter .fill { height: 100%; border-radius: 999px; }
+.asset .reuse-meter .fill.hi { background: var(--good); }
+.asset .reuse-meter .fill.lo { background: var(--warn); }
+.asset .reuse-meter .rs { font-size: 11px; color: var(--muted); min-width: 58px; text-align: right; }
+.asset .subtype { font-size: 11px; color: var(--muted); text-transform: capitalize; }

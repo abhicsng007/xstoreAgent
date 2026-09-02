@@ -25,6 +25,7 @@ from agent.librarian import (
     list_duplicates,
     surface_repurposable,
 )
+from agent.reusability import REUSABLE_BAND, reusability_score
 from agent.tools.ingest import ingest_folder, ingest_folder_events
 
 app = FastAPI(title="xStoreAgent", description="AI Asset Librarian for film/video teams")
@@ -57,6 +58,17 @@ class ApproveRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     session_id: str = "web"
+
+
+@app.on_event("startup")
+def _ensure_schema_on_boot() -> None:
+    """Make sure the catalog schema is current (incl. the asset_subtype column)
+    before serving reads, so a dashboard load before the first ingest still works.
+    Best-effort: never block boot if ClickHouse is unreachable."""
+    try:
+        ch.ensure_schema()
+    except Exception as exc:  # noqa: BLE001 — don't crash startup on a cold DB
+        print(f"[startup] ensure_schema skipped: {exc}")
 
 
 # --- Health ---
@@ -106,8 +118,28 @@ def api_library() -> dict:
 
 
 @app.get("/api/assets")
-def api_assets(asset_type: str | None = None, status: str | None = None, limit: int = 200) -> dict:
-    return {"assets": ch.list_assets(asset_type=asset_type, status=status, limit=limit)}
+def api_assets(
+    asset_type: str | None = None,
+    status: str | None = None,
+    limit: int = 200,
+    sort: str = "reusability",
+) -> dict:
+    """List catalog assets, each stamped with a 0-100 reusability_score.
+
+    Default `sort=reusability` ranks repurposable assets (logos, icons, B-roll,
+    music) at the top and project-unique ones (voiceovers/dialogue) at the bottom;
+    `sort=newest` keeps the ClickHouse recency order.
+    """
+    assets = ch.list_assets(asset_type=asset_type, status=status, limit=limit)
+    for a in assets:
+        a["reusability_score"] = reusability_score(
+            a.get("asset_type", "other"),
+            a.get("asset_subtype", ""),
+            bool(a.get("reusable", True)),
+        )
+    if sort == "reusability":
+        assets.sort(key=lambda a: a["reusability_score"], reverse=True)
+    return {"assets": assets, "reusable_band": REUSABLE_BAND}
 
 
 # --- Repurpose search ---

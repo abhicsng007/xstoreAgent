@@ -89,6 +89,9 @@ def main():
         "video/project_rough_cut_v3.mov": "placeholder project rough cut version 3",
         "audio/ambient_city.mp3": "placeholder ambient city street tone bed",
         "audio/whoosh_sfx.wav": "placeholder whoosh transition sound effect",
+        # A project-specific voiceover — should be judged non-reusable and sink to
+        # the bottom of the reusability-ranked library (unique to one video).
+        "audio/voiceover_host_scene4.wav": "placeholder host narration voiceover recorded for scene 4 of this project",
         "brand/logo_primary.svg": "<svg xmlns='http://www.w3.org/2000/svg'/>",
         "notes.txt": "Shot list and licensing notes for the campaign.",
     }
