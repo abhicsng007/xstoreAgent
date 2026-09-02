@@ -29,6 +29,8 @@ function toast(msg, ms = 3200) {
   toast._t = setTimeout(() => (t.hidden = true), ms);
 }
 
+let reusableBand = 50; // divider between repurposable and project-specific (from API)
+
 function assetCard(a, { showScore = false } = {}) {
   const icon = TYPE_ICON[a.asset_type] || "📦";
   const tags = (a.tags || []).slice(0, 5).map((t) => `<span class="tag">${t}</span>`).join("");
@@ -37,11 +39,21 @@ function assetCard(a, { showScore = false } = {}) {
     : `<span class="badge stale">stale</span>`;
   const score = showScore && a.match_score != null
     ? `<span class="score">${a.match_score}% match</span>` : "";
+  const rs = a.reusability_score;
+  const meter = rs != null ? `
+    <div class="reuse-meter">
+      <div class="track"><div class="fill ${rs >= reusableBand ? "hi" : "lo"}" style="width:${rs}%"></div></div>
+      <span class="rs">${rs}/100 reuse</span>
+    </div>` : "";
+  const subtype = a.asset_subtype
+    ? `<div class="subtype">${a.asset_subtype.replace(/_/g, " ")}</div>` : "";
   return `<div class="asset">
       <div class="icon">${icon}</div>
       <div class="name">${a.filename || ""}</div>
       <div class="cap">${a.caption || "<em>uncaptioned</em>"}</div>
+      ${subtype}
       <div class="tags">${tags}</div>
+      ${meter}
       <div class="foot">${badge}${score}</div>
     </div>`;
 }
@@ -74,13 +86,50 @@ async function loadLibrary() {
   loadAssets();
 }
 
+let sortMode = "reusability"; // reusability | newest
+
 async function loadAssets() {
-  const q = activeType ? `?asset_type=${encodeURIComponent(activeType)}` : "";
-  const { assets } = await api("/api/assets" + q);
-  document.getElementById("asset-grid").innerHTML =
-    assets.map((a) => assetCard(a)).join("") ||
-    `<div class="empty">No assets${activeType ? " of this type" : ""} yet.</div>`;
+  const params = new URLSearchParams({ sort: sortMode });
+  if (activeType) params.set("asset_type", activeType);
+  const resp = await api("/api/assets?" + params.toString());
+  const assets = resp.assets;
+  if (resp.reusable_band != null) reusableBand = resp.reusable_band;
+
+  const grid = document.getElementById("asset-grid");
+  if (!assets.length) {
+    grid.innerHTML = `<div class="empty">No assets${activeType ? " of this type" : ""} yet.</div>`;
+    return;
+  }
+
+  // In reusability order, split the grid into a repurposable band and a
+  // project-specific band with labelled dividers; otherwise a flat grid.
+  if (sortMode === "reusability") {
+    const hi = assets.filter((a) => (a.reusability_score ?? 0) >= reusableBand);
+    const lo = assets.filter((a) => (a.reusability_score ?? 0) < reusableBand);
+    const parts = [];
+    if (hi.length) {
+      parts.push(`<div class="band-label reuse">♻️ Repurposable · reuse across projects</div>`);
+      parts.push(hi.map((a) => assetCard(a)).join(""));
+    }
+    if (lo.length) {
+      parts.push(`<div class="band-label unique">📌 Project-specific · unique to one video</div>`);
+      parts.push(lo.map((a) => assetCard(a)).join(""));
+    }
+    grid.innerHTML = parts.join("");
+  } else {
+    grid.innerHTML = assets.map((a) => assetCard(a)).join("");
+  }
 }
+
+// Sort toggle (By reusability | Newest)
+document.getElementById("sort-toggle").addEventListener("click", (e) => {
+  const btn = e.target.closest(".seg");
+  if (!btn || btn.dataset.sort === sortMode) return;
+  sortMode = btn.dataset.sort;
+  document.querySelectorAll("#sort-toggle .seg").forEach((s) =>
+    s.classList.toggle("active", s.dataset.sort === sortMode));
+  loadAssets();
+});
 
 // --- Repurpose search ---
 document.getElementById("search-form").onsubmit = async (e) => {
@@ -98,20 +147,106 @@ document.getElementById("search-form").onsubmit = async (e) => {
   } catch (err) { box.innerHTML = `<div class="empty">Search failed: ${err.message}</div>`; }
 };
 
-// --- Ingest ---
-document.getElementById("ingest-form").onsubmit = async (e) => {
+// --- Ingest with live multi-agent reasoning (Server-Sent Events) ---
+const CREW = [
+  ["Scanner", "🔍"], ["Curator", "🎬"], ["Memory", "🧠"], ["Archivist", "🗄️"],
+];
+
+function renderCrew(activeName) {
+  document.getElementById("crew").innerHTML = CREW.map(([name, ava]) => {
+    const state = crewState[name] || "";
+    const cls = name === activeName ? "active" : state;
+    const tick = state === "done" ? "✓" : (name === activeName ? "▸" : "");
+    return `<div class="member ${cls}">
+        <span class="ava">${ava}</span><span class="nm">${name}</span>
+        <span class="tick">${tick}</span>
+      </div>`;
+  }).join("");
+}
+
+let crewState = {};
+
+function reasoningStep(ev) {
+  const log = document.getElementById("reasoning-log");
+  const row = document.createElement("div");
+  row.className = `rstep ${ev.status || "info"}`;
+  row.innerHTML = `
+    <span class="rdot"></span>
+    <span class="ricon">${ev.icon || "•"}</span>
+    <div class="rbody">
+      <div class="rhead"><span class="ragent">${ev.agent || ""}</span>
+        <span class="rtitle">${ev.title || ""}</span></div>
+      ${ev.detail ? `<div class="rdetail">${ev.detail}</div>` : ""}
+    </div>`;
+  log.appendChild(row);
+  log.scrollTop = log.scrollHeight;
+}
+
+function startIngestStream(root, project) {
+  const card = document.getElementById("reasoning-card");
+  const log = document.getElementById("reasoning-log");
+  const status = document.getElementById("reasoning-status");
+  card.hidden = false;
+  log.innerHTML = "";
+  crewState = {};
+  renderCrew(null);
+  status.textContent = "the crew is working…";
+  card.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  const qs = new URLSearchParams({ root, project }).toString();
+  const es = new EventSource(`${API}/api/ingest/stream?${qs}`);
+
+  es.onmessage = (m) => {
+    let ev;
+    try { ev = JSON.parse(m.data); } catch { return; }
+
+    if (ev.type === "start") { status.textContent = `ingesting ${ev.root}…`; return; }
+
+    if (ev.type === "step") {
+      // A "done" step retires that agent; anything else marks it active.
+      if (ev.status === "done") crewState[ev.agent] = "done";
+      renderCrew(ev.status === "done" ? null : ev.agent);
+      reasoningStep(ev);
+      return;
+    }
+
+    if (ev.type === "done") {
+      const s = ev.summary || {};
+      CREW.forEach(([n]) => (crewState[n] = "done"));
+      renderCrew(null);
+      reasoningStep({
+        agent: "Librarian", icon: "✅", status: "done", title: "Library updated",
+        detail: `${s.inserted ?? 0} assets remembered from ${s.scanned ?? 0} files.`,
+      });
+      // Flag the closing line as the amber summary card.
+      log.lastChild.classList.add("summary");
+      status.textContent = "done.";
+      es.close();
+      toast(`Ingested ${s.inserted ?? 0} assets from ${s.scanned ?? 0} files.`);
+      loadLibrary(); loadReview();
+      return;
+    }
+
+    if (ev.type === "error") {
+      reasoningStep({ agent: "System", icon: "⚠️", status: "error",
+        title: "Ingest failed", detail: ev.message || "" });
+      status.textContent = "failed.";
+      es.close();
+    }
+  };
+
+  es.onerror = () => {
+    status.textContent = "connection closed.";
+    es.close();
+  };
+}
+
+document.getElementById("ingest-form").onsubmit = (e) => {
   e.preventDefault();
   const root = document.getElementById("ingest-root").value.trim();
   const project = document.getElementById("ingest-project").value.trim();
   if (!root) return;
-  toast("Ingesting… classifying, captioning and embedding assets.");
-  try {
-    const r = await api("/api/ingest", {
-      method: "POST", body: JSON.stringify({ root, project }),
-    });
-    toast(`Ingested ${r.inserted} assets from ${r.scanned} files.`);
-    loadLibrary(); loadReview();
-  } catch (err) { toast(`Ingest failed: ${err.message}`, 5000); }
+  startIngestStream(root, project);
 };
 
 // --- Review: duplicates + stale ---

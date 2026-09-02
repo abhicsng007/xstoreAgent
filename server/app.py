@@ -9,10 +9,12 @@ Run locally:  uvicorn server.app:app --reload
 """
 from __future__ import annotations
 
+import json
 import os
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -23,7 +25,8 @@ from agent.librarian import (
     list_duplicates,
     surface_repurposable,
 )
-from agent.tools.ingest import ingest_folder
+from agent.reusability import REUSABLE_BAND, reusability_score
+from agent.tools.ingest import ingest_folder, ingest_folder_events
 
 app = FastAPI(title="xStoreAgent", description="AI Asset Librarian for film/video teams")
 
@@ -57,6 +60,17 @@ class ChatRequest(BaseModel):
     session_id: str = "web"
 
 
+@app.on_event("startup")
+def _ensure_schema_on_boot() -> None:
+    """Make sure the catalog schema is current (incl. the asset_subtype column)
+    before serving reads, so a dashboard load before the first ingest still works.
+    Best-effort: never block boot if ClickHouse is unreachable."""
+    try:
+        ch.ensure_schema()
+    except Exception as exc:  # noqa: BLE001 — don't crash startup on a cold DB
+        print(f"[startup] ensure_schema skipped: {exc}")
+
+
 # --- Health ---
 @app.get("/api/health")
 def health() -> dict:
@@ -71,6 +85,32 @@ def api_ingest(req: IngestRequest) -> dict:
     return ingest_folder(req.root, project=req.project, limit=req.limit)
 
 
+@app.get("/api/ingest/stream")
+def api_ingest_stream(root: str, project: str = "", limit: int | None = None):
+    """Server-Sent Events: run ingestion and stream the multi-agent reasoning
+    trace (Scanner → Curator → Memory → Archivist) to the dashboard live.
+
+    Uses GET so the browser's native EventSource can consume it. Each event is a
+    JSON `step` (or `start`/`done`/`error`) emitted the moment the pipeline reaches
+    it, so the UI renders the agents thinking in real time.
+    """
+    if not os.path.isdir(root):
+        raise HTTPException(400, f"Not a folder: {root}")
+
+    def event_stream():
+        try:
+            for ev in ingest_folder_events(root, project=project, limit=limit):
+                yield f"data: {json.dumps(ev)}\n\n"
+        except Exception as exc:  # surface a crash as a final SSE event, not a 500
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)[:300]})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # --- Library (dashboard) ---
 @app.get("/api/library")
 def api_library() -> dict:
@@ -78,8 +118,28 @@ def api_library() -> dict:
 
 
 @app.get("/api/assets")
-def api_assets(asset_type: str | None = None, status: str | None = None, limit: int = 200) -> dict:
-    return {"assets": ch.list_assets(asset_type=asset_type, status=status, limit=limit)}
+def api_assets(
+    asset_type: str | None = None,
+    status: str | None = None,
+    limit: int = 200,
+    sort: str = "reusability",
+) -> dict:
+    """List catalog assets, each stamped with a 0-100 reusability_score.
+
+    Default `sort=reusability` ranks repurposable assets (logos, icons, B-roll,
+    music) at the top and project-unique ones (voiceovers/dialogue) at the bottom;
+    `sort=newest` keeps the ClickHouse recency order.
+    """
+    assets = ch.list_assets(asset_type=asset_type, status=status, limit=limit)
+    for a in assets:
+        a["reusability_score"] = reusability_score(
+            a.get("asset_type", "other"),
+            a.get("asset_subtype", ""),
+            bool(a.get("reusable", True)),
+        )
+    if sort == "reusability":
+        assets.sort(key=lambda a: a["reusability_score"], reverse=True)
+    return {"assets": assets, "reusable_band": REUSABLE_BAND}
 
 
 # --- Repurpose search ---

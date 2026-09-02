@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS xstoreagent.assets
     path          String,                         -- absolute source path
     filename      String,
     asset_type    LowCardinality(String),         -- video | image | icon | vector | audio | document | other
+    asset_subtype LowCardinality(String) DEFAULT '', -- logo | icon | b_roll | music | sfx | dialogue | ... (drives reusability rank)
     ext           LowCardinality(String),
     size_bytes    UInt64,
     created_at     DateTime DEFAULT now(),

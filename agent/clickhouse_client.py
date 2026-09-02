@@ -29,8 +29,9 @@ def _as_datetime(value: Any) -> datetime:
     return datetime.now()
 
 _ASSETS_COLUMNS = [
-    "path", "filename", "asset_type", "ext", "size_bytes", "created_at",
-    "project", "caption", "tags", "reusable", "status", "content_hash", "embedding",
+    "path", "filename", "asset_type", "asset_subtype", "ext", "size_bytes",
+    "created_at", "project", "caption", "tags", "reusable", "status",
+    "content_hash", "embedding",
 ]
 
 
@@ -63,7 +64,9 @@ def ensure_schema(client: Client | None = None) -> None:
         (
             id UUID DEFAULT generateUUIDv4(),
             path String, filename String,
-            asset_type LowCardinality(String), ext LowCardinality(String),
+            asset_type LowCardinality(String),
+            asset_subtype LowCardinality(String) DEFAULT '',
+            ext LowCardinality(String),
             size_bytes UInt64, created_at DateTime DEFAULT now(),
             project String DEFAULT '',
             caption String DEFAULT '', tags Array(String) DEFAULT [],
@@ -74,6 +77,11 @@ def ensure_schema(client: Client | None = None) -> None:
         )
         ENGINE = MergeTree ORDER BY (asset_type, created_at)
         """
+    )
+    # Backfill the column on instances created before subtype was tracked.
+    client.command(
+        f"ALTER TABLE {s.ch_database}.assets "
+        f"ADD COLUMN IF NOT EXISTS asset_subtype LowCardinality(String) DEFAULT ''"
     )
 
 
@@ -89,6 +97,7 @@ def insert_assets(rows: list[dict[str, Any]], client: Client | None = None) -> i
             r.get("path", ""),
             r.get("filename", ""),
             r.get("asset_type", "other"),
+            r.get("asset_subtype", ""),
             r.get("ext", ""),
             int(r.get("size_bytes", 0)),
             _as_datetime(r.get("created_at")),
@@ -233,8 +242,8 @@ def list_assets(
         params["status"] = status
     result = client.query(
         f"""
-        SELECT toString(id) AS id, filename, asset_type, ext, size_bytes,
-               created_at, project, caption, tags, reusable, status
+        SELECT toString(id) AS id, filename, asset_type, asset_subtype, ext,
+               size_bytes, created_at, project, caption, tags, reusable, status
         FROM assets
         WHERE {' AND '.join(where)}
         ORDER BY created_at DESC
