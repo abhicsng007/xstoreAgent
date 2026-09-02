@@ -308,10 +308,3 @@ button.golden {
 #mcp-badge.ok { color: var(--good); }
 #mcp-badge.bad { color: var(--danger); }
 code { font-size: 12px; color: var(--accent-2); }
-
-.card.optional { opacity: .88; }
-.opt-tag {
-  font-size: 10px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase;
-  color: var(--muted); border: 1px solid var(--line); border-radius: 999px;
-  padding: 1px 7px; margin-left: 6px;
-}
