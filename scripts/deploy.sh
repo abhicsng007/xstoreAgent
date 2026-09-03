@@ -72,7 +72,10 @@ ENV_VARS="${ENV_VARS},CLICKHOUSE_USER=${CLICKHOUSE_USER:-default}"
 ENV_VARS="${ENV_VARS},CLICKHOUSE_DATABASE=${CLICKHOUSE_DATABASE:-xstoreAgent}"
 ENV_VARS="${ENV_VARS},CLICKHOUSE_SECURE=${CLICKHOUSE_SECURE:-true}"
 # Official mcp-clickhouse must be on for the ClickHouse track (eligibility).
-ENV_VARS="${ENV_VARS},USE_CLICKHOUSE_MCP=${USE_CLICKHOUSE_MCP:-true}"
+# Force true regardless of local .env — catalog reads must go through the MCP server.
+ENV_VARS="${ENV_VARS},USE_CLICKHOUSE_MCP=true"
+# Multi-agent Librarian crew (root + Analyst/Archivist/Scout/Curator/Editor).
+ENV_VARS="${ENV_VARS},USE_MULTI_AGENT=${USE_MULTI_AGENT:-true}"
 ENV_VARS="${ENV_VARS},SAMPLE_ASSETS_DIR=/app/sample_assets"
 
 echo "==> Deploying to Cloud Run (this builds the container; ~3-5 min)..."
