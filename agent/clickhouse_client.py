@@ -32,7 +32,7 @@ def _as_datetime(value: Any) -> datetime:
 _ASSETS_COLUMNS = [
     "id", "path", "filename", "asset_type", "asset_subtype", "ext", "size_bytes",
     "created_at", "project", "caption", "tags", "reusable", "status",
-    "content_hash", "embedding",
+    "content_hash", "embedding", "visual_embedding",
 ]
 
 _EVENT_COLUMNS = ["asset_id", "event", "project", "bytes", "detail"]
@@ -77,15 +77,21 @@ def ensure_schema(client: Client | None = None) -> None:
             reusable Bool DEFAULT true,
             status LowCardinality(String) DEFAULT 'active',
             content_hash String DEFAULT '',
-            embedding Array(Float32) DEFAULT []
+            embedding Array(Float32) DEFAULT [],
+            visual_embedding Array(Float32) DEFAULT []
         )
         ENGINE = MergeTree ORDER BY (asset_type, created_at)
         """
     )
-    # Backfill the column on instances created before subtype was tracked.
+    # Backfill columns on instances created before they were tracked.
     client.command(
         f"ALTER TABLE {s.ch_database}.assets "
         f"ADD COLUMN IF NOT EXISTS asset_subtype LowCardinality(String) DEFAULT ''"
+    )
+    # visual_embedding: true multimodal (image/video) vector for visual near-dup.
+    client.command(
+        f"ALTER TABLE {s.ch_database}.assets "
+        f"ADD COLUMN IF NOT EXISTS visual_embedding Array(Float32) DEFAULT []"
     )
     client.command(
         f"""
@@ -138,6 +144,7 @@ def insert_assets(rows: list[dict[str, Any]], client: Client | None = None) -> i
             r.get("status", "active"),
             r.get("content_hash", ""),
             [float(x) for x in r.get("embedding", [])],
+            [float(x) for x in r.get("visual_embedding", [])],
         ])
     client.insert(
         table="assets",
@@ -233,22 +240,26 @@ def find_duplicates(
                 "kind": "exact",
             })
 
+    # Near-duplicates from the TRUE visual (multimodal) vector when present —
+    # falls back to the caption vector for rows that predate visual_embedding.
     near = client.query(
         """
         WITH embedded AS (
-            SELECT id, filename, asset_type, embedding
+            SELECT id, filename, asset_type,
+                   if(length(visual_embedding) > 0, visual_embedding, embedding) AS vec
             FROM assets
-            WHERE status != 'archived' AND length(embedding) > 0
+            WHERE status != 'archived'
+              AND (length(visual_embedding) > 0 OR length(embedding) > 0)
         )
         SELECT toString(a.id) AS id_a, a.filename AS file_a,
                toString(b.id) AS id_b, b.filename AS file_b,
                a.asset_type AS asset_type,
-               cosineDistance(a.embedding, b.embedding) AS distance
+               cosineDistance(a.vec, b.vec) AS distance
         FROM embedded AS a
         CROSS JOIN embedded AS b
         WHERE a.id < b.id AND a.asset_type = b.asset_type
-          AND length(a.embedding) = length(b.embedding)
-          AND cosineDistance(a.embedding, b.embedding) < {thr:Float64}
+          AND length(a.vec) = length(b.vec)
+          AND cosineDistance(a.vec, b.vec) < {thr:Float64}
         ORDER BY distance ASC
         LIMIT 50
         """,

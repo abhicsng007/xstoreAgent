@@ -31,7 +31,7 @@
       <h2>Librarian</h2>
       <div id="mcp-badge" class="muted">ClickHouse MCP</div>
     </div>
-    <p class="muted">Ask in English. The agent plans, then queries your catalog through the official <code>mcp-clickhouse</code> server — you’ll see <code>list_tables</code> and <code>run_select_query</code> in the trace.</p>
+    <p class="muted">Ask in English. The Librarian delegates to a crew — the <b>Analyst</b> queries your catalog through the official <code>mcp-clickhouse</code> server (watch for <code>list_tables</code> and <code>run_select_query</code>), alongside an Archivist, Scout, Curator, and Editor. You’ll see each hand-off in the trace.</p>
     <div id="chat-log" class="chat-log"></div>
     <form id="chat-form" class="chat-form">
       <input id="chat-input" type="text"
@@ -63,6 +63,22 @@
       <button type="submit">Surface reusable assets</button>
     </form>
     <div id="search-results" class="results-grid"></div>
+  </section>
+
+  <!-- Assemble a cut (cinema-creative) -->
+  <section class="card assemble" id="assemble-card">
+    <div class="card-head">
+      <h2>✂️ Assemble a cut</h2>
+      <div class="muted">Editor · builds from your library</div>
+    </div>
+    <p class="muted">Describe the video. The <b>Editor</b> agent pulls reusable assets from ClickHouse and arranges them into an edit-ready shot list mapped to story beats — then tells you what's still missing to shoot.</p>
+    <form id="assemble-form" class="search">
+      <input id="assemble-brief" type="text"
+        placeholder="e.g. 30s upbeat city product ad with a strong hook and a clear CTA" />
+      <button type="submit">Assemble</button>
+    </form>
+    <div id="assemble-trace" class="reasoning-log"></div>
+    <div id="assemble-board" class="storyboard"></div>
   </section>
 
   <!-- Library overview -->

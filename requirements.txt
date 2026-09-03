@@ -21,3 +21,7 @@ pydantic-settings>=2.3.0
 # --- Media / utilities ---
 pillow>=10.3.0
 python-dotenv>=1.0.1
+# Generate real short sample clips (so Gemini actually watches video, not filenames).
+imageio>=2.34.0
+imageio-ffmpeg>=0.5.1
+numpy>=1.26.0

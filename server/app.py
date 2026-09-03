@@ -31,6 +31,7 @@ from agent.librarian import (
     surface_repurposable,
 )
 from agent.reusability import REUSABLE_BAND, reusability_score
+from agent.tools.assemble import assemble_sequence, assemble_sequence_events
 from agent.tools.ingest import ingest_folder, ingest_folder_events
 from agent.tools.scout import scout_storage_events, storage_status
 
@@ -271,6 +272,33 @@ def api_search(req: SearchRequest) -> dict:
     return {"brief": req.brief, "results": results}
 
 
+# --- Assemble a cut (cinema-creative) ---
+@app.post("/api/assemble")
+def api_assemble(req: SearchRequest) -> dict:
+    """Assemble an edit-ready sequence from reusable library assets for a brief."""
+    return {"sequence": assemble_sequence(req.brief, limit=req.limit)}
+
+
+@app.post("/api/assemble/stream")
+def api_assemble_stream(req: SearchRequest):
+    """SSE: the Editor pulls candidates from ClickHouse, then arranges a cut."""
+    if not req.brief.strip():
+        raise HTTPException(400, "brief required")
+
+    def event_stream():
+        try:
+            for ev in assemble_sequence_events(req.brief.strip(), limit=req.limit):
+                yield _sse(ev)
+        except Exception as exc:  # surface a crash as a final SSE event, not a 500
+            yield _sse({"type": "error", "message": str(exc)[:300]})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # --- Review: duplicates + stale ---
 @app.get("/api/review")
 def api_review() -> dict:
@@ -298,6 +326,9 @@ def api_approve(req: ApproveRequest) -> dict:
 
 # --- Conversational agent ---
 def _event_payloads(event) -> list[dict]:
+    # Which agent authored this event (root librarian or a delegated sub-agent) —
+    # lets the UI badge the multi-agent trace (analyst / archivist / scout / curator).
+    agent = getattr(event, "author", "") or ""
     payloads: list[dict] = []
     for fc in event.get_function_calls() or []:
         payloads.append({
@@ -305,6 +336,7 @@ def _event_payloads(event) -> list[dict]:
             "status": "working",
             "name": fc.name or "",
             "args": _clip(getattr(fc, "args", None)),
+            "agent": agent,
         })
     for fr in event.get_function_responses() or []:
         payloads.append({
@@ -312,6 +344,7 @@ def _event_payloads(event) -> list[dict]:
             "status": "done",
             "name": fr.name or "",
             "result": _clip(getattr(fr, "response", None)),
+            "agent": agent,
         })
     texts: list[str] = []
     if event.content and event.content.parts:
@@ -323,6 +356,7 @@ def _event_payloads(event) -> list[dict]:
             "type": "text",
             "text": "".join(texts),
             "final": bool(event.is_final_response()),
+            "agent": agent,
         })
     return payloads
 

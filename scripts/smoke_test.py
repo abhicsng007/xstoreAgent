@@ -15,6 +15,7 @@ from agent import clickhouse_client as ch
 from agent.clickhouse_mcp import mcp_status
 from agent.config import sample_assets_path
 from agent.librarian import list_duplicates, surface_repurposable
+from agent.tools.assemble import assemble_sequence
 from agent.tools.ingest import ingest_folder
 
 
@@ -63,16 +64,38 @@ def main() -> int:
     dups = stage("duplicate detection", list_duplicates)
     print(f"        {len(dups)} duplicate candidate(s)")
 
+    def _visual_vectors():
+        c = ch.get_client()
+        n = c.query(
+            "SELECT count() FROM assets WHERE asset_type IN ('image','video') "
+            "AND length(visual_embedding) > 0"
+        ).result_rows[0][0]
+        if not n:
+            raise AssertionError("no image/video row has a visual_embedding")
+        return n
+
+    vv = stage("multimodal visual embeddings stored", _visual_vectors)
+    print(f"        {vv} image/video row(s) carry a true visual vector")
+
+    seq = stage(
+        "assemble a cut (Editor)",
+        lambda: assemble_sequence("30s upbeat city product ad with a hook and CTA"),
+    )
+    print(f"        {len(seq.get('shots', []))} shot(s), {len(seq.get('gaps', []))} gap(s) — "
+          f"{seq.get('title', '')}")
+
     try:
         from agent.librarian import build_agent
 
-        stage("ADK agent + MCP toolset constructs", build_agent)
+        agent = stage("ADK multi-agent Librarian + MCP toolset constructs", build_agent)
+        subs = [s.name for s in (getattr(agent, "sub_agents", None) or [])]
+        print(f"        crew: {', '.join(subs) or '(single-agent mode)'}")
     except Exception as exc:
         print(f"  FAIL  ADK agent: {exc}")
         raise
 
     print("-" * 40 + "\nAll stages passed. Ready to demo.")
-    print("Next: uvicorn server.app:app --reload  →  Golden prompt in the UI.")
+    print("Next: uvicorn server.app:app --reload  ->  Golden prompt in the UI.")
     return 0
 
 

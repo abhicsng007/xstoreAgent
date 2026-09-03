@@ -21,7 +21,7 @@ from uuid import uuid4
 
 from .. import clickhouse_client as ch
 from .classify import classify_asset
-from .embed import EMBED_DIM, embed_asset
+from .embed import EMBED_DIM, embed_asset, embed_image, embed_video
 from .scan import scan_folder, summarize
 
 # The sub-agents the pipeline is narrated as. Each maps to a real pipeline stage,
@@ -97,11 +97,24 @@ def ingest_folder_events(
                     "Projecting its meaning into the shared vector space…")
         embedding = embed_asset(asset_type, a.path, caption=caption)
         got = bool(embedding)
+        # True visual (multimodal) vector for image/video — powers visual
+        # near-duplicate detection. Skipped gracefully on unreadable/stub media.
+        visual: list[float] = []
+        if asset_type in ("image", "video"):
+            try:
+                visual = (embed_video if asset_type == "video" else embed_image)(
+                    a.path, contextual_text=caption
+                )
+            except Exception as exc:  # noqa: BLE001 — caption vector still stored
+                print(f"[ingest] visual embed skipped for {a.filename}: {exc}")
         yield _step(MEMORY, "done",
                     f"{a.filename} vectorized" if got else f"{a.filename} stored (no vector)",
-                    f"{len(embedding)}-d embedding queued for ClickHouse" if got
+                    (f"{len(embedding)}-d caption vector"
+                     + (f" + {len(visual)}-d visual vector" if visual else "")
+                     + " queued for ClickHouse") if got
                     else f"embedding unavailable — metadata still catalogued (dim {EMBED_DIM})",
-                    data={"filename": a.filename, "dims": len(embedding)})
+                    data={"filename": a.filename, "dims": len(embedding),
+                          "visual_dims": len(visual)})
 
         row = a.to_row()
         row.update(
@@ -114,6 +127,7 @@ def ingest_folder_events(
             reusable=reusable,
             status="stale" if not reusable else "active",
             embedding=embedding,
+            visual_embedding=visual,
         )
         rows.append(row)
 

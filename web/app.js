@@ -12,6 +12,21 @@ const MCP_TOOLS = new Set([
   "list_tables", "list_databases", "run_select_query", "run_query",
 ]);
 
+// The Librarian crew — for badging which agent authored each trace step.
+const AGENT_META = {
+  librarian: { icon: "📚", label: "Librarian" },
+  analyst:   { icon: "🔎", label: "Analyst" },
+  archivist: { icon: "🗄️", label: "Archivist" },
+  scout:     { icon: "🛰️", label: "Scout" },
+  curator:   { icon: "🎬", label: "Curator" },
+  editor:    { icon: "✂️", label: "Editor" },
+};
+const agentMeta = (name) => AGENT_META[(name || "").toLowerCase()] || null;
+function agentBadge(name) {
+  const m = agentMeta(name);
+  return m ? `<span class="agent-badge ${(name || "").toLowerCase()}">${m.icon} ${m.label}</span>` : "";
+}
+
 const fmtBytes = (b) => {
   if (!b) return "0 B";
   const u = ["B", "KB", "MB", "GB", "TB"];
@@ -399,11 +414,23 @@ async function runChat(message) {
     await readSSE(res, (ev) => {
       if (ev.type === "tool") {
         wait.remove();
+        // Delegation: the root handing off to a specialist sub-agent.
+        if (ev.name === "transfer_to_agent") {
+          if (ev.status !== "working") return;  // show the handoff once
+          let target = "";
+          try { target = (JSON.parse(ev.args || "{}").agent_name) || ""; } catch { /* */ }
+          chatAppend(
+            `<div class="delegate">${agentBadge(ev.agent) || "📚 Librarian"}
+               <span class="arrow">→ delegates to</span> ${agentBadge(target) || target}</div>`,
+            "from-tool",
+          );
+          return;
+        }
         const mcp = isMcpTool(ev.name);
         const body = ev.status === "working" ? (ev.args || "") : (ev.result || "");
         chatAppend(
           `<div class="tool ${mcp ? "mcp" : ""} ${ev.status}">
-             <span class="tname">${mcp ? "MCP" : "tool"} · ${ev.name}</span>
+             <span class="tname">${agentBadge(ev.agent)}${mcp ? "MCP" : "tool"} · ${ev.name}</span>
              ${body ? `<pre>${body}</pre>` : ""}
            </div>`,
           "from-tool",
@@ -413,9 +440,12 @@ async function runChat(message) {
       if (ev.type === "text" && ev.text) {
         wait.remove();
         if (!replyEl || ev.final) {
-          replyEl = chatAppend(`<div class="bubble agent md"></div>`, "from-agent");
+          replyEl = chatAppend(
+            `<div class="bubble agent md">${agentBadge(ev.agent)}<span class="md-body"></span></div>`,
+            "from-agent",
+          );
         }
-        replyEl.querySelector(".bubble").innerHTML = renderMarkdown(ev.text);
+        replyEl.querySelector(".md-body").innerHTML = renderMarkdown(ev.text);
       }
       if (ev.type === "error") {
         wait.remove();
@@ -438,6 +468,110 @@ document.getElementById("chat-form").onsubmit = (e) => {
 };
 
 document.getElementById("golden-prompt").onclick = () => runChat(GOLDEN_PROMPT);
+
+// --- Assemble a cut (cinema-creative) ---
+const BEAT_LABEL = {
+  hook: "Hook", establish: "Establish", product: "Product",
+  subject: "Subject", proof: "Proof", cta: "CTA",
+};
+
+function shotThumb(s) {
+  if (s.asset_id && PREVIEW_TYPES.has(s.asset_type)) {
+    return `<img class="thumb" src="${API}/api/preview/${s.asset_id}" alt="" onerror="this.style.display='none'">`;
+  }
+  return `<div class="icon">${TYPE_ICON[s.asset_type] || "📦"}</div>`;
+}
+
+function assembleStep(ev) {
+  const log = document.getElementById("assemble-trace");
+  const row = document.createElement("div");
+  row.className = `rstep ${ev.status || "info"}`;
+  row.innerHTML = `
+    <span class="rdot"></span>
+    <span class="ricon">${ev.icon || "•"}</span>
+    <div class="rbody">
+      <div class="rhead"><span class="ragent">${ev.agent || ""}</span>
+        <span class="rtitle">${ev.title || ""}</span></div>
+      ${ev.detail ? `<div class="rdetail">${escapeHtml(ev.detail)}</div>` : ""}
+    </div>`;
+  log.appendChild(row);
+  log.scrollTop = log.scrollHeight;
+}
+
+function renderStoryboard(seq) {
+  const board = document.getElementById("assemble-board");
+  if (!seq || (!(seq.shots || []).length && !(seq.gaps || []).length)) {
+    board.innerHTML = "";
+    return;
+  }
+  const shots = (seq.shots || []).map((s, i) => `
+    <div class="shot">
+      <div class="beat">${BEAT_LABEL[(s.beat || "").toLowerCase()] || s.beat || `Shot ${i + 1}`}</div>
+      ${shotThumb(s)}
+      <div class="shot-body">
+        <div class="shot-top"><span class="dur">${Math.round(s.duration_sec || 0)}s</span>
+          ${s.match_score != null ? `<span class="score">${s.match_score}%</span>` : ""}</div>
+        <div class="action">${escapeHtml(s.action || "")}</div>
+        <div class="why">${escapeHtml(s.why || "")}</div>
+        <div class="fname">${escapeHtml(s.filename || "")}</div>
+      </div>
+    </div>`).join(`<div class="cut">✂</div>`);
+  const total = (seq.shots || []).reduce((t, s) => t + (Number(s.duration_sec) || 0), 0);
+  const music = seq.music && seq.music.filename
+    ? `<div class="music">🔊 <b>Music bed:</b> ${escapeHtml(seq.music.filename)} — ${escapeHtml(seq.music.why || "")}</div>`
+    : "";
+  const gaps = (seq.gaps || []).length
+    ? `<div class="gaps"><div class="gaps-h">🎯 Still to shoot / source</div>
+        ${seq.gaps.map((g) => `<div class="gap"><b>${escapeHtml(g.need)}</b> — ${escapeHtml(g.suggestion)}</div>`).join("")}
+      </div>`
+    : "";
+  board.innerHTML = `
+    <div class="seq-head">
+      <div class="seq-title">${escapeHtml(seq.title || "Untitled cut")}</div>
+      <div class="seq-log">${escapeHtml(seq.logline || "")}</div>
+      <div class="seq-meta">${(seq.shots || []).length} shots · ~${Math.round(total)}s · from ${seq.candidates_considered || 0} candidates</div>
+    </div>
+    <div class="timeline">${shots || "<div class='empty'>No usable assets yet — see gaps below.</div>"}</div>
+    ${music}${gaps}`;
+}
+
+async function runAssemble(brief) {
+  const board = document.getElementById("assemble-board");
+  const trace = document.getElementById("assemble-trace");
+  const btn = document.querySelector("#assemble-form button");
+  document.getElementById("assemble-brief").value = brief;
+  trace.innerHTML = "";
+  board.innerHTML = "";
+  btn.disabled = true;
+  try {
+    const res = await fetch(API + "/api/assemble/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ brief, limit: 16 }),
+    });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.detail || res.statusText);
+    }
+    await readSSE(res, (ev) => {
+      if (ev.type === "step") assembleStep(ev);
+      else if (ev.type === "done") renderStoryboard(ev.sequence);
+      else if (ev.type === "error") {
+        assembleStep({ status: "error", icon: "⚠️", agent: "Editor", title: "Error", detail: ev.message });
+      }
+    });
+  } catch (err) {
+    assembleStep({ status: "error", icon: "⚠️", agent: "Editor", title: "Failed", detail: err.message });
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById("assemble-form").onsubmit = (e) => {
+  e.preventDefault();
+  const b = document.getElementById("assemble-brief").value.trim();
+  if (b) runAssemble(b);
+};
 
 async function loadHealth() {
   const badge = document.getElementById("mcp-badge");

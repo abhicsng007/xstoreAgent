@@ -37,6 +37,10 @@ class Settings:
     # Default ON — hosted/demo must not silently fall back to the Python client.
     use_clickhouse_mcp: bool = os.getenv("USE_CLICKHOUSE_MCP", "true").lower() == "true"
 
+    # Multi-agent Librarian (root orchestrator + Analyst/Archivist/Scout/Curator
+    # sub-agents). Default ON. Set false to fall back to the single-agent Librarian.
+    use_multi_agent: bool = os.getenv("USE_MULTI_AGENT", "true").lower() == "true"
+
     # Bundled sample pack (Cloud Run image copies it to /app/sample_assets).
     sample_assets_dir: str = os.getenv("SAMPLE_ASSETS_DIR", "")
 

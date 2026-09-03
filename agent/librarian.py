@@ -9,6 +9,7 @@ from __future__ import annotations
 from . import clickhouse_client as ch
 from .clickhouse_mcp import build_clickhouse_mcp_toolset
 from .config import get_settings
+from .tools.assemble import assemble_sequence
 from .tools.embed import embed_text
 from .tools.ingest import ingest_folder as _ingest_folder
 
@@ -88,10 +89,11 @@ def library_stats() -> list[dict]:
     return ch.library_overview()
 
 
-def _instruction() -> str:
+def _analyst_instruction() -> str:
     db = get_settings().ch_database
-    return f"""You are the Librarian, an AI asset manager for a film/video production team.
-You organize media and tell creators what they can REUSE instead of reshooting.
+    return f"""You are the Analyst, the catalog/data specialist for a film/video
+production team's asset library. You answer what's in the library, what to REUSE
+instead of reshooting, how much duplicate storage is wasted, and what to archive.
 
 The catalog lives in ClickHouse database `{db}`.
 Tables:
@@ -123,9 +125,8 @@ Reuse search for a brief:
   Then run_query using the `how_to_search` SQL it returned (JOIN the latest brief
   row — never paste thousands of floats into the query).
 
-WRITES — function tools only:
-  ingest_folder, archive_asset. Never archive unless the user explicitly approves
-  a specific asset id.
+Your only write tool is embed_brief (for search). You do NOT ingest or archive —
+if the user wants to archive, tell them to approve and the Librarian will route it.
 
 How to answer a "what can we reuse / what's wasted / what should I archive" brief:
   - list_tables
@@ -141,11 +142,101 @@ How to answer a "what can we reuse / what's wasted / what should I archive" brie
        logo/icon/vector_art ≈ $150 relicense;
        music/sfx ≈ $80.
   Be concise and practical. Cite MCP SQL results, not guesses.
+
+Answer the user directly and completely. Do not transfer back to the Librarian.
 """
 
 
+def _archivist_instruction() -> str:
+    return """You are the Archivist. You archive an asset ONLY when the Librarian
+routes an explicit, user-approved request naming a specific asset id. Call
+archive_asset(asset_id) for that id, confirm what you archived (it is reversible —
+nothing is deleted), and stop. Never archive without an explicit approved id.
+Answer directly; do not transfer back."""
+
+
+def _scout_instruction() -> str:
+    return """You are the Scout. When the library is running low on storage or the
+user asks where to offload media, use Google Search to find cloud-storage
+providers with a FREE tier suitable for large media (video/images/audio). Return
+5-7 options ranked by free capacity: name, free GB, a short suitability note, and
+the signup URL. Prefer current, well-known providers. Answer directly; do not
+transfer back."""
+
+
+def _curator_instruction() -> str:
+    return """You are the Curator, the creative-reuse specialist. Given a set of
+assets (captions, tags, types) the Analyst surfaced, explain in a creator's voice
+WHY each fits the brief and how it could be used in the edit. Keep it vivid and
+practical — you shape raw matches into a reuse rationale a director would read.
+Answer directly; do not transfer back."""
+
+
+def _editor_instruction() -> str:
+    return """You are the Editor. When the user wants a cut, an edit, a shot list,
+a sequence, or "assemble something" from the library for a brief, call
+assemble_sequence(brief) and present the result as a storyboard: the title and
+logline, the ordered shots (beat, asset, duration, on-screen action, why it fits),
+the music bed, and the honest gaps still to shoot. Answer directly; do not
+transfer back."""
+
+
+def _root_instruction() -> str:
+    db = get_settings().ch_database
+    return f"""You are the Librarian, the orchestrator for a film/video production
+team's asset library (catalog in ClickHouse `{db}`). You give a media library a
+brain: organize assets and tell creators what to REUSE instead of reshooting.
+
+You lead a small crew of specialists — delegate, don't answer catalog questions
+yourself, and never invent catalog contents:
+  • analyst  — the data expert. For ANYTHING about what's in the library, what to
+    reuse, duplicate waste, storage stats, or brief→asset search, transfer to analyst.
+    The analyst queries ClickHouse through the official MCP server.
+  • archivist — executes archiving. ONLY after the user explicitly approves
+    archiving a specific asset id, transfer to archivist with that id.
+  • scout    — finds free cloud storage on the web when storage is tight or asked.
+  • curator  — writes the creative "why reuse / how to use" rationale on request.
+  • editor   — assembles an edit-ready cut / shot list / sequence from the library
+    for a brief. Transfer here when the user wants to "assemble", "cut", "edit",
+    build a "shot list", or "make a video" from what they own.
+
+You also hold one tool yourself: ingest_folder, to bring a new folder into the catalog.
+
+Routing: pick the right specialist and transfer. For the common
+"what can we reuse / what's wasted / what should I archive" brief, transfer to the
+analyst — it returns the full package. For "assemble/cut/edit a sequence", transfer
+to the editor. Only handle ingest requests yourself."""
+
+
+def _build_single_agent(mcp):
+    """Fallback: the original single-agent Librarian (USE_MULTI_AGENT=false)."""
+    from google.adk.agents import Agent
+    from google.adk.tools import FunctionTool
+
+    return Agent(
+        name="librarian",
+        model=get_settings().gemini_model,
+        description="Organizes a creator's media library and surfaces reusable assets.",
+        instruction=_analyst_instruction(),
+        tools=[
+            FunctionTool(func=ingest_folder),
+            FunctionTool(func=embed_brief),
+            FunctionTool(func=archive_asset),
+            mcp,
+        ],
+    )
+
+
 def build_agent():
-    """Construct the ADK root agent: write function tools + ClickHouse MCP reads."""
+    """Construct the ADK Librarian.
+
+    Multi-agent (default): a root orchestrator that delegates to Analyst (owns the
+    ClickHouse MCP reads + brief embedding), Archivist (approved archives), Scout
+    (grounded web search for storage), and Curator (creative reuse rationale). We
+    use ADK `sub_agents` (LLM-routed transfer) rather than agent-as-tool so a
+    delegated agent runs on the SAME event stream — the Analyst's `list_tables` /
+    `run_select_query` MCP calls stay visible in the live trace.
+    """
     from google.adk.agents import Agent
     from google.adk.tools import FunctionTool
 
@@ -157,17 +248,62 @@ def build_agent():
             "mcp-clickhouse server."
         )
 
+    if not get_settings().use_multi_agent:
+        return _build_single_agent(mcp)
+
+    model = get_settings().gemini_model
+
+    # Analyst owns the MCP read path + brief embedding (the partner integration).
+    analyst = Agent(
+        name="analyst",
+        model=model,
+        description="Queries the ClickHouse catalog via mcp-clickhouse: reuse, waste, search.",
+        instruction=_analyst_instruction(),
+        tools=[FunctionTool(func=embed_brief), mcp],
+        disallow_transfer_to_peers=True,
+    )
+    archivist = Agent(
+        name="archivist",
+        model=model,
+        description="Archives a specific asset id after explicit user approval (reversible).",
+        instruction=_archivist_instruction(),
+        tools=[FunctionTool(func=archive_asset)],
+        disallow_transfer_to_peers=True,
+    )
+    # Scout uses the built-in Google Search tool (must be its only tool).
+    from google.adk.tools import google_search
+
+    scout = Agent(
+        name="scout",
+        model=model,
+        description="Finds free-tier cloud storage on the web when storage is tight.",
+        instruction=_scout_instruction(),
+        tools=[google_search],
+        disallow_transfer_to_peers=True,
+    )
+    curator = Agent(
+        name="curator",
+        model=model,
+        description="Writes the creative 'why reuse / how to use' rationale for assets.",
+        instruction=_curator_instruction(),
+        disallow_transfer_to_peers=True,
+    )
+    editor = Agent(
+        name="editor",
+        model=model,
+        description="Assembles an edit-ready cut / shot list from reusable library assets.",
+        instruction=_editor_instruction(),
+        tools=[FunctionTool(func=assemble_sequence)],
+        disallow_transfer_to_peers=True,
+    )
+
     return Agent(
         name="librarian",
-        model=get_settings().gemini_model,
-        description="Organizes a creator's media library and surfaces reusable assets.",
-        instruction=_instruction(),
-        tools=[
-            FunctionTool(func=ingest_folder),
-            FunctionTool(func=embed_brief),
-            FunctionTool(func=archive_asset),
-            mcp,
-        ],
+        model=model,
+        description="Orchestrates a media-library crew: organize, reuse, dedup, archive.",
+        instruction=_root_instruction(),
+        tools=[FunctionTool(func=ingest_folder)],
+        sub_agents=[analyst, archivist, scout, curator, editor],
     )
 
 

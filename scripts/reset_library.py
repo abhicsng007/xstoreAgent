@@ -13,6 +13,9 @@ by accident.
     # wipe, then re-ingest a clean sample library in one shot:
     python scripts/reset_library.py --yes --ingest sample_assets --project demo
 
+    # …and top up with 5k realistic rows so the analytics run at real scale:
+    python scripts/reset_library.py --yes --ingest sample_assets --project demo --seed 5000
+
 Reads the same .env as the app (GCP + ClickHouse settings).
 """
 from __future__ import annotations
@@ -35,7 +38,7 @@ def _count(client) -> int:
         return 0
 
 
-def reset(ingest_root: str | None = None, project: str = "") -> None:
+def reset(ingest_root: str | None = None, project: str = "", seed_count: int = 0) -> None:
     settings = get_settings()
     db = settings.ch_database
 
@@ -61,6 +64,12 @@ def reset(ingest_root: str | None = None, project: str = "") -> None:
         print(f"Ingested {result.get('inserted', 0)} assets "
               f"from {result.get('scanned', 0)} files: {breakdown}")
 
+    if seed_count > 0:
+        print(f"Seeding {seed_count} realistic rows for scale …")
+        from seed_scale import seed  # scripts/ is on sys.path via this file
+
+        seed(count=seed_count, project="archive_import")
+
     print("Done. Library is clean.")
 
 
@@ -71,6 +80,8 @@ def main() -> int:
     p.add_argument("--ingest", metavar="FOLDER", default=None,
                    help="After wiping, re-ingest this folder for a clean library.")
     p.add_argument("--project", default="", help="Project label for the re-ingest.")
+    p.add_argument("--seed", type=int, default=0, metavar="N",
+                   help="After ingest, add N realistic rows (scale) via seed_scale.")
     args = p.parse_args()
 
     if not args.yes:
@@ -79,7 +90,7 @@ def main() -> int:
               "Re-run with --yes (optionally --ingest sample_assets) to proceed.")
         return 2
 
-    reset(ingest_root=args.ingest, project=args.project)
+    reset(ingest_root=args.ingest, project=args.project, seed_count=args.seed)
     return 0
 
 

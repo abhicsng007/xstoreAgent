@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS xstoreAgent.assets
     reusable      Bool DEFAULT true,
     status        LowCardinality(String) DEFAULT 'active',  -- active | duplicate | stale | archived
     content_hash  String DEFAULT '',              -- sha256 for exact-dup GROUP BY
-    embedding     Array(Float32) DEFAULT []       -- gemini-embedding-001 of the caption
+    embedding     Array(Float32) DEFAULT [],      -- gemini-embedding-001 of the caption (search)
+    visual_embedding Array(Float32) DEFAULT []    -- multimodalembedding@001 of image/video pixels (visual near-dup)
 )
 ENGINE = MergeTree
 ORDER BY (asset_type, created_at);

@@ -25,5 +25,11 @@ COPY web ./web
 COPY sample_assets ./sample_assets
 COPY scripts ./scripts
 
+# Regenerate the sample pack (real images + real short video/audio clips) inside
+# the image, so the hosted demo always has genuine media for Gemini to WATCH/HEAR —
+# independent of what the source upload included (video is gitignored). Uses
+# Pillow + imageio(+ffmpeg) from requirements; no network needed.
+RUN python scripts/make_sample_pack.py && python scripts/make_media_samples.py
+
 # Cloud Run sets $PORT; bind to it.
 CMD exec uvicorn server.app:app --host 0.0.0.0 --port ${PORT}

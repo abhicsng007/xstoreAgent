@@ -1,0 +1,26 @@
+# gcloud upload ignores. Without this file, gcloud falls back to .gitignore —
+# which excludes sample_assets/*.mp4/*.mov and would strip the demo clips from the
+# Cloud Build context. We exclude only junk and secrets, and KEEP sample_assets.
+.git
+.gitignore
+.venv
+venv
+env/
+__pycache__/
+*.pyc
+*.pyo
+
+# Secrets — never upload.
+.env
+*.key
+service-account*.json
+gcp-key.json
+
+# Dev-only
+web/node_modules
+.vscode
+.idea
+.DS_Store
+*.log
+.cache/
+organized/

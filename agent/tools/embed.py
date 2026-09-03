@@ -68,11 +68,13 @@ def embed_text(text: str) -> list[float]:
 def embed_image(path: str, contextual_text: str = "") -> list[float]:
     from vertexai.vision_models import Image
 
-    embeddings = _model().get_embeddings(
+    from ..retry import with_retry
+
+    embeddings = with_retry(lambda: _model().get_embeddings(
         image=Image.load_from_file(path),
         contextual_text=contextual_text[:1024] or None,
         dimension=EMBED_DIM,
-    )
+    ))
     return list(embeddings.image_embedding or [])
 
 
@@ -81,12 +83,14 @@ def embed_video(path: str, contextual_text: str = "") -> list[float]:
     first segment as the asset-level embedding (sample cost stays bounded)."""
     from vertexai.vision_models import Video, VideoSegmentConfig
 
-    embeddings = _model().get_embeddings(
+    from ..retry import with_retry
+
+    embeddings = with_retry(lambda: _model().get_embeddings(
         video=Video.load_from_file(path),
         video_segment_config=VideoSegmentConfig(end_offset_sec=8),
         contextual_text=contextual_text[:1024] or None,
         dimension=EMBED_DIM,
-    )
+    ))
     segments = embeddings.video_embeddings or []
     if segments:
         return list(segments[0].embedding)
