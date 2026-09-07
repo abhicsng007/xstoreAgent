@@ -62,18 +62,29 @@ def ingest_folder_events(
     assets = scan_folder(root, compute_hash=True)
     skipped = [a for a in assets if a.size_bytes == 0]
     assets = [a for a in assets if a.size_bytes > 0]
+    known = ch.existing_hashes()
+    already = [a for a in assets if a.content_hash and a.content_hash in known]
+    assets = [a for a in assets if not (a.content_hash and a.content_hash in known)]
     if limit:
         assets = assets[:limit]
 
     summary = summarize(assets)
     by_type = summary["by_type"]
     breakdown = ", ".join(f"{v['count']} {k}" for k, v in sorted(by_type.items())) or "nothing"
+    extra = []
+    if skipped:
+        extra.append(f"skipped {len(skipped)} empty")
+    if already:
+        extra.append(f"{len(already)} already in the library")
+    if summary["needs_review"]:
+        extra.append(f"{summary['needs_review']} need a closer look")
+    n_seen = len(assets) + len(already)
+    n_types = len({a.asset_type for a in (*assets, *already)})
     yield _step(SCANNER, "done",
-                f"Segregated {len(assets)} files into {len(by_type)} types",
-                f"{breakdown}"
-                + (f" · skipped {len(skipped)} empty" if skipped else "")
-                + (f" · {summary['needs_review']} need a closer look" if summary["needs_review"] else ""),
-                data={"by_type": by_type, "total_files": len(assets)})
+                f"Segregated {n_seen} files into {n_types} types",
+                f"{breakdown}" + (" · " + " · ".join(extra) if extra else ""),
+                data={"by_type": by_type, "total_files": len(assets),
+                      "skipped_existing": len(already)})
 
     # --- Per-file: Curator judges, Memory embeds --------------------------------
     rows: list[dict] = []
@@ -172,8 +183,9 @@ def ingest_folder_events(
     result = {
         "root": root,
         "project": project,
-        "scanned": len(assets),
+        "scanned": len(assets) + len(already),
         "skipped_empty": len(skipped),
+        "skipped_existing": len(already),
         "inserted": inserted,
         "summary": summary,
     }

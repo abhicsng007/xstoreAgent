@@ -391,7 +391,15 @@ function startIngestStream(url) {
   status.textContent = "the crew is working…";
   card.scrollIntoView({ behavior: "smooth", block: "start" });
 
+  let finished = false;
   const es = new EventSource(url);
+  const stop = (label) => {
+    if (finished) return;
+    finished = true;
+    es.close();
+    status.textContent = label;
+  };
+
   es.onmessage = (m) => {
     let ev;
     try { ev = JSON.parse(m.data); } catch { return; }
@@ -409,13 +417,15 @@ function startIngestStream(url) {
       const s = ev.summary || {};
       CREW.forEach(([n]) => (crewState[n] = "done"));
       renderCrew(null);
+      const skipped = s.skipped_existing
+        ? ` · ${s.skipped_existing} already catalogued`
+        : "";
       reasoningStep({
         agent: "Librarian", icon: "✅", status: "done", title: "Library updated",
-        detail: `${s.inserted ?? 0} assets remembered from ${s.scanned ?? 0} files.`,
+        detail: `${s.inserted ?? 0} assets remembered from ${s.scanned ?? 0} files${skipped}.`,
       });
-      log.lastChild.classList.add("summary");
-      status.textContent = "done.";
-      es.close();
+      if (log.lastChild) log.lastChild.classList.add("summary");
+      stop("done.");
       toast(`Ingested ${s.inserted ?? 0} assets from ${s.scanned ?? 0} files.`);
       assetOffset = 0; dupOffset = 0; staleOffset = 0;
       loadLibrary(); loadStorage(); loadReview();
@@ -425,11 +435,19 @@ function startIngestStream(url) {
     if (ev.type === "error") {
       reasoningStep({ agent: "System", icon: "⚠️", status: "error",
         title: "Ingest failed", detail: ev.message || "" });
-      status.textContent = "failed.";
-      es.close();
+      stop("failed.");
+      toast(ev.message || "Ingest failed", 5000);
     }
   };
-  es.onerror = () => { status.textContent = "connection closed."; es.close(); };
+  es.onerror = () => {
+    if (finished) { es.close(); return; }
+    reasoningStep({
+      agent: "System", icon: "⚠️", status: "error",
+      title: "Connection closed",
+      detail: "The ingest stream ended before finishing. Check the folder path — it must exist on the machine running the app, not only on this browser.",
+    });
+    stop("failed.");
+  };
 }
 
 function ingestFromPath() {
@@ -448,6 +466,11 @@ document.getElementById("ingest-form").onsubmit = (e) => {
   ingestFromPath();
 };
 document.getElementById("ingest-folder-btn").onclick = ingestFromPath;
+["ingest-root", "ingest-project"].forEach((id) => {
+  document.getElementById(id).addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); ingestFromPath(); }
+  });
+});
 
 document.getElementById("ingest-sample").onclick = () => {
   const project = document.getElementById("ingest-project").value.trim() || "demo";
@@ -666,6 +689,16 @@ async function loadHealth() {
       : (!chOk ? "ClickHouse unreachable" : "MCP not ready");
     badge.classList.toggle("ok", mcpOk && chOk);
     badge.classList.toggle("bad", !(mcpOk && chOk));
+    const samplePath = (h.sample_assets && h.sample_assets.path) || "";
+    const hosted = samplePath.replace(/\\/g, "/").includes("/app/sample_assets");
+    const folderBtn = document.getElementById("ingest-folder-btn");
+    const folderIn = document.getElementById("ingest-root");
+    folderBtn.disabled = hosted;
+    folderIn.disabled = hosted;
+    if (hosted) {
+      folderIn.placeholder = "Folder ingest is local-only";
+      folderBtn.title = "Cloud Run can't see folders on your computer. Use Ingest sample pack, or run uvicorn locally.";
+    }
   } catch {
     badge.textContent = "backend offline";
     badge.classList.add("bad");

@@ -156,6 +156,16 @@ def insert_assets(rows: list[dict[str, Any]], client: Client | None = None) -> i
     return len(data)
 
 
+def existing_hashes(client: Client | None = None) -> set[str]:
+    """Content hashes already in the catalog — ingest skips these so a folder
+    can be re-pointed at without paying Gemini twice or duplicating rows."""
+    client = client or get_client()
+    result = client.query(
+        "SELECT DISTINCT content_hash FROM assets WHERE content_hash != ''"
+    )
+    return {row[0] for row in result.result_rows if row[0]}
+
+
 def repurpose_search(
     brief_vec: list[float], limit: int = 12, client: Client | None = None
 ) -> list[dict[str, Any]]:

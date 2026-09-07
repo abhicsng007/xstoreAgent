@@ -177,8 +177,25 @@ def _ingest_event_stream(root: str, project: str, limit: int | None):
 @app.get("/api/ingest/stream")
 def api_ingest_stream(root: str, project: str = "", limit: int | None = None):
     """Server-Sent Events: ingestion pipeline as a live reasoning trace."""
+    # Always SSE — EventSource cannot read a JSON 400 body, so a missing folder
+    # has to arrive as an `error` event or the UI only shows "connection closed".
     if not os.path.isdir(root):
-        raise HTTPException(400, f"Not a folder: {root}")
+        def missing():
+            yield _sse({"type": "start", "root": root, "project": project})
+            yield _sse({
+                "type": "error",
+                "message": (
+                    f"Not a folder on this machine: {root}. "
+                    "Folder ingest reads the server disk (local uvicorn), "
+                    "not a path on your laptop. On Cloud Run use Ingest sample pack."
+                ),
+            })
+
+        return StreamingResponse(
+            missing(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
     return StreamingResponse(
         _ingest_event_stream(root, project, limit),
         media_type="text/event-stream",
