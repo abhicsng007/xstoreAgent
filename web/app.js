@@ -5,7 +5,9 @@ const TYPE_ICON = {
   video: "🎞️", image: "🖼️", icon: "◻️", vector: "✒️",
   audio: "🔊", document: "📄", other: "📦",
 };
-const PREVIEW_TYPES = new Set(["image", "icon", "vector"]);
+const PREVIEW_TYPES = new Set(["image", "icon", "vector", "video"]);
+const PAGE_SIZE = 24;
+const REVIEW_PAGE = 8;
 const GOLDEN_PROMPT =
   "We're shooting a 30-second city product ad. What can we reuse, how much duplicate storage are we wasting, and what should I archive?";
 const MCP_TOOLS = new Set([
@@ -142,10 +144,28 @@ async function readSSE(response, onEvent) {
 }
 
 let reusableBand = 50;
+let assetOffset = 0;
+let dupOffset = 0;
+let staleOffset = 0;
+
+function thumbHtml(a) {
+  const icon = TYPE_ICON[a.asset_type] || "📦";
+  const kind = a.preview_kind || (PREVIEW_TYPES.has(a.asset_type) ? "image" : "none");
+  const fallback = `<div class="thumb placeholder"><span class="icon">${icon}</span></div>`;
+  if (a.has_preview && (kind === "image" || kind === "video") && a.id) {
+    const src = `${API}/api/preview/${a.id}`;
+    return `<img class="thumb" src="${src}" alt=""
+      onerror="this.className='thumb placeholder';this.removeAttribute('src');this.alt='';this.outerHTML='<div class=\\'thumb placeholder\\'><span class=\\'icon\\'>${icon}</span></div>'">`;
+  }
+  if (a.has_preview && kind === "audio") {
+    return `<div class="thumb audio-thumb"><span class="icon">${icon}</span>
+      <span class="play-hint">Play</span></div>`;
+  }
+  return fallback;
+}
 
 function assetCard(a, { showScore = false } = {}) {
-  const icon = TYPE_ICON[a.asset_type] || "📦";
-  const tags = (a.tags || []).slice(0, 5).map((t) => `<span class="tag">${t}</span>`).join("");
+  const tags = (a.tags || []).slice(0, 5).map((t) => `<span class="tag">${escapeHtml(t)}</span>`).join("");
   const badge = a.reusable
     ? `<span class="badge reusable">reusable</span>`
     : `<span class="badge stale">stale</span>`;
@@ -158,14 +178,11 @@ function assetCard(a, { showScore = false } = {}) {
       <span class="rs">${rs}/100 reuse</span>
     </div>` : "";
   const subtype = a.asset_subtype
-    ? `<div class="subtype">${a.asset_subtype.replace(/_/g, " ")}</div>` : "";
-  const thumb = (a.id && PREVIEW_TYPES.has(a.asset_type))
-    ? `<img class="thumb" src="${API}/api/preview/${a.id}" alt="" onerror="this.style.display='none'">`
-    : `<div class="icon">${icon}</div>`;
-  return `<div class="asset">
-      ${thumb}
-      <div class="name">${a.filename || ""}</div>
-      <div class="cap">${a.caption || "<em>uncaptioned</em>"}</div>
+    ? `<div class="subtype">${escapeHtml(String(a.asset_subtype).replace(/_/g, " "))}</div>` : "";
+  return `<div class="asset" role="button" tabindex="0" data-asset-id="${a.id || ""}">
+      ${thumbHtml(a)}
+      <div class="name">${escapeHtml(a.filename || "")}</div>
+      <div class="cap">${a.caption ? escapeHtml(a.caption) : "<em>uncaptioned</em>"}</div>
       ${subtype}
       <div class="tags">${tags}</div>
       ${meter}
@@ -173,8 +190,51 @@ function assetCard(a, { showScore = false } = {}) {
     </div>`;
 }
 
+function renderPager(el, { total, limit, offset, onChange }) {
+  if (!el) return;
+  const pages = Math.max(1, Math.ceil((total || 0) / limit) || 1);
+  const page = Math.floor((offset || 0) / limit) + 1;
+  if (!total) { el.innerHTML = ""; return; }
+  const from = offset + 1;
+  const to = Math.min(offset + limit, total);
+  const btn = (p, label, opts = {}) => {
+    const cur = p === page;
+    const dis = opts.disabled || p < 1 || p > pages;
+    return `<button type="button" class="pg" data-page="${p}"
+      ${dis ? "disabled" : ""} ${cur ? 'aria-current="page"' : ""}>${label}</button>`;
+  };
+  let start = Math.max(1, page - 2);
+  let end = Math.min(pages, start + 4);
+  start = Math.max(1, end - 4);
+  const nums = [];
+  if (start > 1) {
+    nums.push(btn(1, "1"));
+    if (start > 2) nums.push(`<span class="pg-ellipsis">…</span>`);
+  }
+  for (let p = start; p <= end; p++) nums.push(btn(p, String(p)));
+  if (end < pages) {
+    if (end < pages - 1) nums.push(`<span class="pg-ellipsis">…</span>`);
+    nums.push(btn(pages, String(pages)));
+  }
+  el.innerHTML = `
+    <div class="pg-info">${from.toLocaleString()}–${to.toLocaleString()} of ${total.toLocaleString()}</div>
+    <div class="pg-btns">
+      ${btn(page - 1, "Prev", { disabled: page <= 1 })}
+      ${nums.join("")}
+      ${btn(page + 1, "Next", { disabled: page >= pages })}
+    </div>`;
+  el.querySelectorAll("button.pg").forEach((b) => {
+    b.onclick = () => {
+      const p = Number(b.dataset.page);
+      if (!p || p < 1 || p > pages || p === page) return;
+      onChange((p - 1) * limit);
+    };
+  });
+}
+
 // --- Library overview + grid ---
 let activeType = null;
+let activeProject = null;
 
 async function loadLibrary() {
   const { overview } = await api("/api/library");
@@ -195,13 +255,20 @@ async function loadLibrary() {
       </div>`).join("");
   }
 
-  const chips = [`<span class="chip ${!activeType ? "active" : ""}" data-t="">All</span>`]
-    .concat(overview.map((r) =>
-      `<span class="chip ${activeType === r.asset_type ? "active" : ""}" data-t="${r.asset_type}">${r.asset_type}</span>`));
+  const chips = [
+    `<span class="chip ${!activeType && !activeProject ? "active" : ""}" data-t="" data-p="">All</span>`,
+    `<span class="chip ${activeProject === "demo" ? "active" : ""}" data-t="" data-p="demo">Sample pack</span>`,
+  ].concat(overview.map((r) =>
+    `<span class="chip ${activeType === r.asset_type && !activeProject ? "active" : ""}" data-t="${r.asset_type}" data-p="">${r.asset_type}</span>`));
   const filter = document.getElementById("type-filter");
   filter.innerHTML = chips.join("");
   filter.querySelectorAll(".chip").forEach((c) =>
-    c.onclick = () => { activeType = c.dataset.t || null; loadLibrary(); loadAssets(); });
+    c.onclick = () => {
+      activeType = c.dataset.t || null;
+      activeProject = c.dataset.p || null;
+      assetOffset = 0;
+      loadLibrary();
+    });
 
   loadAssets();
 }
@@ -209,15 +276,20 @@ async function loadLibrary() {
 let sortMode = "reusability";
 
 async function loadAssets() {
-  const params = new URLSearchParams({ sort: sortMode });
+  const params = new URLSearchParams({
+    sort: sortMode, limit: String(PAGE_SIZE), offset: String(assetOffset),
+  });
   if (activeType) params.set("asset_type", activeType);
+  if (activeProject) params.set("project", activeProject);
   const resp = await api("/api/assets?" + params.toString());
-  const assets = resp.assets;
+  const assets = resp.assets || [];
   if (resp.reusable_band != null) reusableBand = resp.reusable_band;
 
   const grid = document.getElementById("asset-grid");
-  if (!assets.length) {
+  const pager = document.getElementById("asset-pager");
+  if (!assets.length && !resp.total) {
     grid.innerHTML = `<div class="empty">No assets${activeType ? " of this type" : ""} yet. Use <b>Ingest sample pack</b>.</div>`;
+    pager.innerHTML = "";
     return;
   }
 
@@ -237,12 +309,19 @@ async function loadAssets() {
   } else {
     grid.innerHTML = assets.map((a) => assetCard(a)).join("");
   }
+  renderPager(pager, {
+    total: resp.total || 0,
+    limit: resp.limit || PAGE_SIZE,
+    offset: resp.offset || 0,
+    onChange: (off) => { assetOffset = off; loadAssets(); },
+  });
 }
 
 document.getElementById("sort-toggle").addEventListener("click", (e) => {
   const btn = e.target.closest(".seg");
   if (!btn || btn.dataset.sort === sortMode) return;
   sortMode = btn.dataset.sort;
+  assetOffset = 0;
   document.querySelectorAll("#sort-toggle .seg").forEach((s) =>
     s.classList.toggle("active", s.dataset.sort === sortMode));
   loadAssets();
@@ -338,6 +417,7 @@ function startIngestStream(url) {
       status.textContent = "done.";
       es.close();
       toast(`Ingested ${s.inserted ?? 0} assets from ${s.scanned ?? 0} files.`);
+      assetOffset = 0; dupOffset = 0; staleOffset = 0;
       loadLibrary(); loadStorage(); loadReview();
       return;
     }
@@ -476,10 +556,12 @@ const BEAT_LABEL = {
 };
 
 function shotThumb(s) {
-  if (s.asset_id && PREVIEW_TYPES.has(s.asset_type)) {
-    return `<img class="thumb" src="${API}/api/preview/${s.asset_id}" alt="" onerror="this.style.display='none'">`;
+  const type = s.asset_type || "";
+  if (s.asset_id && PREVIEW_TYPES.has(type)) {
+    return `<img class="thumb" src="${API}/api/preview/${s.asset_id}" alt=""
+      onerror="this.style.display='none'">`;
   }
-  return `<div class="icon">${TYPE_ICON[s.asset_type] || "📦"}</div>`;
+  return `<div class="icon">${TYPE_ICON[type] || "📦"}</div>`;
 }
 
 function assembleStep(ev) {
@@ -659,41 +741,75 @@ function startScoutStream() {
 document.getElementById("scout-btn").onclick = startScoutStream;
 
 // --- Review ---
-async function loadReview() {
-  const { duplicates, stale } = await api("/api/review");
-  const parts = [];
+function reviewThumb(id, has, type) {
+  const icon = TYPE_ICON[type] || "📦";
+  if (has && id) {
+    return `<img src="${API}/api/preview/${id}" alt=""
+      onerror="this.outerHTML='<div class=ph>${icon}</div>'">`;
+  }
+  return `<div class="ph">${icon}</div>`;
+}
 
-  parts.push(`<h3 style="margin:14px 0 8px;font-size:14px">Duplicate candidates</h3>`);
+async function loadReview() {
+  const qs = new URLSearchParams({
+    dup_offset: String(dupOffset), dup_limit: String(REVIEW_PAGE),
+    stale_offset: String(staleOffset), stale_limit: String(REVIEW_PAGE),
+  });
+  const data = await api("/api/review?" + qs.toString());
+  const duplicates = data.duplicates || [];
+  const stale = data.stale || [];
+
+  const dupBox = document.getElementById("dup-list");
   if (duplicates.length) {
-    parts.push(duplicates.map((d) => `
-      <div class="dup">
+    dupBox.innerHTML = duplicates.map((d) => `
+      <div class="dup clickable" data-asset-id="${d.id_a || ""}">
+        <div class="thumbs">
+          ${reviewThumb(d.id_a, d.has_preview_a, d.asset_type)}
+          ${reviewThumb(d.id_b, d.has_preview_b, d.asset_type)}
+        </div>
         <div class="pair">
-          <div>${TYPE_ICON[d.asset_type] || ""} <b>${d.file_a}</b> ↔ ${d.file_b}</div>
+          <div>${TYPE_ICON[d.asset_type] || ""} <b>${escapeHtml(d.file_a || "")}</b> ↔ ${escapeHtml(d.file_b || "")}</div>
           <div class="dist">${d.kind === "exact" ? "exact hash" : "near"} · distance ${Number(d.distance).toFixed(3)}
             ${d.wasted_bytes ? " · " + fmtBytes(d.wasted_bytes) + " reclaimable" : ""}</div>
         </div>
         <div class="actions">
+          <button class="small ghost" data-open-id="${d.id_b || ""}">Preview copy</button>
           <button class="small danger" onclick="approve('${d.id_b}','archive')">Archive duplicate</button>
         </div>
-      </div>`).join(""));
-  } else parts.push(`<div class="empty">No duplicates found.</div>`);
+      </div>`).join("");
+  } else {
+    dupBox.innerHTML = `<div class="empty">No duplicates found.</div>`;
+  }
+  renderPager(document.getElementById("dup-pager"), {
+    total: data.dup_total || 0,
+    limit: data.dup_limit || REVIEW_PAGE,
+    offset: data.dup_offset || 0,
+    onChange: (off) => { dupOffset = off; loadReview(); },
+  });
 
-  parts.push(`<h3 style="margin:18px 0 8px;font-size:14px">Stale / project-specific</h3>`);
+  const staleBox = document.getElementById("stale-list");
   if (stale.length) {
-    parts.push(stale.map((a) => `
-      <div class="dup">
+    staleBox.innerHTML = stale.map((a) => `
+      <div class="dup clickable" data-asset-id="${a.id || ""}">
+        <div class="thumbs">${reviewThumb(a.id, a.has_preview, a.asset_type)}</div>
         <div class="pair">
-          <div>${TYPE_ICON[a.asset_type] || ""} <b>${a.filename}</b></div>
-          <div class="dist">${a.caption || ""}</div>
+          <div>${TYPE_ICON[a.asset_type] || ""} <b>${escapeHtml(a.filename || "")}</b></div>
+          <div class="dist">${escapeHtml(a.caption || "")}</div>
         </div>
         <div class="actions">
           <button class="small ghost" onclick="approve('${a.id}','keep')">Keep</button>
           <button class="small danger" onclick="approve('${a.id}','archive')">Archive</button>
         </div>
-      </div>`).join(""));
-  } else parts.push(`<div class="empty">Nothing flagged as stale.</div>`);
-
-  document.getElementById("review-list").innerHTML = parts.join("");
+      </div>`).join("");
+  } else {
+    staleBox.innerHTML = `<div class="empty">Nothing flagged as stale.</div>`;
+  }
+  renderPager(document.getElementById("stale-pager"), {
+    total: data.stale_total || 0,
+    limit: data.stale_limit || REVIEW_PAGE,
+    offset: data.stale_offset || 0,
+    onChange: (off) => { staleOffset = off; loadReview(); },
+  });
 }
 
 window.approve = async (assetId, action) => {
@@ -704,7 +820,85 @@ window.approve = async (assetId, action) => {
   } catch (err) { toast(`Action failed: ${err.message}`, 4000); }
 };
 
-document.getElementById("refresh-review").onclick = loadReview;
+document.getElementById("refresh-review").onclick = () => {
+  dupOffset = 0; staleOffset = 0; loadReview();
+};
+
+// --- Lightbox ---
+function closeLightbox() {
+  const box = document.getElementById("lightbox");
+  box.hidden = true;
+  document.getElementById("lb-media").innerHTML = "";
+  const vid = box.querySelector("video, audio");
+  if (vid) { vid.pause(); }
+}
+
+async function openAsset(id) {
+  if (!id) return;
+  const box = document.getElementById("lightbox");
+  const media = document.getElementById("lb-media");
+  const meta = document.getElementById("lb-meta");
+  box.hidden = false;
+  media.innerHTML = `<div class="lb-empty">Loading…</div>`;
+  meta.innerHTML = "";
+  try {
+    const { asset: a } = await api(`/api/assets/${id}`);
+    const icon = TYPE_ICON[a.asset_type] || "📦";
+    const kind = a.preview_kind || "none";
+    if (kind === "image") {
+      media.innerHTML = `<img src="${API}/api/preview/${a.id}?kind=media" alt="">`;
+    } else if (kind === "video") {
+      media.innerHTML = `<video controls playsinline poster="${API}/api/preview/${a.id}"
+        src="${API}/api/preview/${a.id}?kind=media"></video>`;
+    } else if (kind === "audio") {
+      media.innerHTML = `<audio controls src="${API}/api/preview/${a.id}?kind=media"></audio>`;
+    } else {
+      media.innerHTML = `<div class="lb-empty"><span class="icon">${icon}</span>
+        Catalog-only row — the file is not on this machine.</div>`;
+    }
+    const created = a.created_at ? String(a.created_at).replace("T", " ").slice(0, 19) : "—";
+    meta.innerHTML = `
+      <div class="name" id="lb-title">${escapeHtml(a.filename || "")}</div>
+      <div class="cap">${a.caption ? escapeHtml(a.caption) : "<em>uncaptioned</em>"}</div>
+      <div class="tags">${(a.tags || []).map((t) => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>
+      <div class="lb-kv">
+        <div><div class="k">Type</div><div class="v">${escapeHtml(a.asset_type || "")}${a.asset_subtype ? " · " + escapeHtml(a.asset_subtype) : ""}</div></div>
+        <div><div class="k">Size</div><div class="v">${fmtBytes(a.size_bytes)}</div></div>
+        <div><div class="k">Project</div><div class="v">${escapeHtml(a.project || "—")}</div></div>
+        <div><div class="k">Reuse</div><div class="v">${a.reusable ? "reusable" : "project-specific"}${a.reusability_score != null ? " · " + a.reusability_score + "/100" : ""}</div></div>
+        <div><div class="k">Status</div><div class="v">${escapeHtml(a.status || "")}</div></div>
+        <div><div class="k">Created</div><div class="v">${escapeHtml(created)}</div></div>
+      </div>`;
+  } catch (err) {
+    media.innerHTML = `<div class="lb-empty">Could not open asset: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+document.getElementById("lb-close").onclick = closeLightbox;
+document.querySelector("#lightbox .lb-backdrop").onclick = closeLightbox;
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !document.getElementById("lightbox").hidden) closeLightbox();
+});
+
+document.addEventListener("click", (e) => {
+  const openBtn = e.target.closest("[data-open-id]");
+  if (openBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    openAsset(openBtn.dataset.openId);
+    return;
+  }
+  if (e.target.closest("button, a, .pager, .chips, .sort-toggle")) return;
+  const hit = e.target.closest("[data-asset-id]");
+  if (hit && hit.dataset.assetId) openAsset(hit.dataset.assetId);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const hit = e.target.closest(".asset[data-asset-id]");
+  if (!hit) return;
+  e.preventDefault();
+  openAsset(hit.dataset.assetId);
+});
 
 // --- Boot ---
 (async function boot() {

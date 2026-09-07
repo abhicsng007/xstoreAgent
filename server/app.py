@@ -34,6 +34,13 @@ from agent.reusability import REUSABLE_BAND, reusability_score
 from agent.tools.assemble import assemble_sequence, assemble_sequence_events
 from agent.tools.ingest import ingest_folder, ingest_folder_events
 from agent.tools.scout import scout_storage_events, storage_status
+from server.preview import (
+    attach_preview,
+    filename_has_preview,
+    poster_path,
+    preview_kind,
+    resolve_media_path,
+)
 
 app = FastAPI(title="xStoreAgent", description="AI Asset Librarian for film/video teams")
 
@@ -44,7 +51,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_PREVIEW_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg", ".tif", ".tiff"}
 _ARRAY_RE = re.compile(r"\[[-0-9.eE+,\s]{80,}\]")
 
 _runner = None
@@ -203,25 +209,46 @@ def api_library() -> dict:
 def api_assets(
     asset_type: str | None = None,
     status: str | None = None,
-    limit: int = 200,
+    project: str | None = None,
+    limit: int = 24,
+    offset: int = 0,
     sort: str = "reusability",
 ) -> dict:
-    """List catalog assets, each stamped with a 0-100 reusability_score."""
-    assets = ch.list_assets(asset_type=asset_type, status=status, limit=limit)
+    """Paginated catalog list. Each row has a 0-100 reusability_score."""
+    if sort not in ("reusability", "newest"):
+        raise HTTPException(400, "sort must be reusability or newest")
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    total = ch.count_assets(asset_type=asset_type, status=status, project=project)
+    if total and offset >= total:
+        offset = ((total - 1) // limit) * limit
+    assets = ch.list_assets(
+        asset_type=asset_type, status=status, project=project,
+        limit=limit, offset=offset, sort=sort,
+    )
     for a in assets:
-        a["reusability_score"] = reusability_score(
-            a.get("asset_type", "other"),
-            a.get("asset_subtype", ""),
-            bool(a.get("reusable", True)),
-        )
-    if sort == "reusability":
-        assets.sort(key=lambda a: a["reusability_score"], reverse=True)
-    return {"assets": assets, "reusable_band": REUSABLE_BAND}
+        attach_preview(a)
+        if a.get("reusability_score") is None:
+            a["reusability_score"] = reusability_score(
+                a.get("asset_type", "other"),
+                a.get("asset_subtype", ""),
+                bool(a.get("reusable", True)),
+            )
+    pages = max(1, (total + limit - 1) // limit) if total else 0
+    return {
+        "assets": assets,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "page": (offset // limit) + 1 if total else 0,
+        "pages": pages,
+        "reusable_band": REUSABLE_BAND,
+    }
 
 
-@app.get("/api/preview/{asset_id}")
-def api_preview(asset_id: str):
-    """Serve an on-disk image for sample-pack cards. 404 if the file isn't here."""
+@app.get("/api/assets/{asset_id}")
+def api_asset(asset_id: str) -> dict:
+    """One catalog row plus whether we can serve a preview."""
     try:
         UUID(asset_id)
     except ValueError as exc:
@@ -229,12 +256,50 @@ def api_preview(asset_id: str):
     row = ch.get_asset(asset_id)
     if not row:
         raise HTTPException(404, "asset not found")
-    path = row.get("path") or ""
-    ext = (row.get("ext") or os.path.splitext(path)[1] or "").lower()
-    if ext not in _PREVIEW_EXTS or not os.path.isfile(path):
+    attach_preview(row)
+    return {"asset": row}
+
+
+@app.get("/api/preview/{asset_id}")
+def api_preview(asset_id: str, kind: str = "auto"):
+    """Serve a thumbnail or the original media file.
+
+    `kind=auto` (default): image bytes, or a JPEG poster for video.
+    `kind=media`: original image / video / audio file for the lightbox player.
+    """
+    try:
+        UUID(asset_id)
+    except ValueError as exc:
+        raise HTTPException(400, "invalid asset id") from exc
+    row = ch.get_asset(asset_id)
+    if not row:
+        raise HTTPException(404, "asset not found")
+    path = resolve_media_path(row)
+    if not path:
         raise HTTPException(404, "preview unavailable")
-    mime, _ = mimetypes.guess_type(path)
-    return FileResponse(path, media_type=mime or "application/octet-stream")
+    ext = (row.get("ext") or os.path.splitext(path)[1] or "").lower()
+    pkind = preview_kind(ext, row.get("asset_type") or "")
+    want = (kind or "auto").lower()
+
+    if want == "media":
+        mime, _ = mimetypes.guess_type(path)
+        return FileResponse(
+            path,
+            media_type=mime or "application/octet-stream",
+            content_disposition_type="inline",
+        )
+
+    if pkind == "image":
+        mime, _ = mimetypes.guess_type(path)
+        return FileResponse(path, media_type=mime or "image/jpeg")
+
+    if pkind == "video":
+        poster = poster_path(str(row["id"]), path)
+        if not poster:
+            raise HTTPException(404, "preview unavailable")
+        return FileResponse(poster, media_type="image/jpeg")
+
+    raise HTTPException(404, "preview unavailable")
 
 
 # --- Storage Scout ---
@@ -265,6 +330,8 @@ def api_scout_stream():
 @app.post("/api/search")
 def api_search(req: SearchRequest) -> dict:
     results = surface_repurposable(req.brief, limit=req.limit)
+    for r in results:
+        attach_preview(r)
     try:
         ch.insert_events([{"event": "searched", "detail": req.brief[:300]}])
     except Exception as exc:  # noqa: BLE001
@@ -301,11 +368,48 @@ def api_assemble_stream(req: SearchRequest):
 
 # --- Review: duplicates + stale ---
 @app.get("/api/review")
-def api_review() -> dict:
+def api_review(
+    dup_offset: int = 0,
+    dup_limit: int = 8,
+    stale_offset: int = 0,
+    stale_limit: int = 8,
+) -> dict:
+    dup_limit = max(1, min(dup_limit, 50))
+    stale_limit = max(1, min(stale_limit, 50))
+    dup_offset = max(0, dup_offset)
+    stale_offset = max(0, stale_offset)
+
+    all_dups = list_duplicates()
+    dup_total = len(all_dups)
+    if dup_total and dup_offset >= dup_total:
+        dup_offset = ((dup_total - 1) // dup_limit) * dup_limit
+    duplicates = all_dups[dup_offset:dup_offset + dup_limit]
+    for d in duplicates:
+        atype = d.get("asset_type") or ""
+        for side, fname_key in (("a", "file_a"), ("b", "file_b")):
+            fname = d.get(fname_key) or ""
+            ext = os.path.splitext(fname)[1]
+            d[f"has_preview_{side}"] = filename_has_preview(fname)
+            d[f"preview_kind_{side}"] = preview_kind(ext, atype) if d[f"has_preview_{side}"] else "none"
+
+    stale_total = ch.count_assets(status="stale")
+    if stale_total and stale_offset >= stale_total:
+        stale_offset = ((stale_total - 1) // stale_limit) * stale_limit
+    stale = ch.list_assets(
+        status="stale", limit=stale_limit, offset=stale_offset, sort="newest",
+    )
+    for a in stale:
+        attach_preview(a)
+
     return {
-        "duplicates": list_duplicates(),
-        "groups": ch.duplicate_groups(),
-        "stale": ch.list_assets(status="stale", limit=200),
+        "duplicates": duplicates,
+        "dup_total": dup_total,
+        "dup_offset": dup_offset,
+        "dup_limit": dup_limit,
+        "stale": stale,
+        "stale_total": stale_total,
+        "stale_offset": stale_offset,
+        "stale_limit": stale_limit,
     }
 
 

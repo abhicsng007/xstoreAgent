@@ -96,6 +96,7 @@
     <div id="type-stats" class="stat-row"></div>
     <div id="type-filter" class="chips"></div>
     <div id="asset-grid" class="results-grid"></div>
+    <div id="asset-pager" class="pager"></div>
   </section>
 
   <!-- Review: duplicates + stale -->
@@ -104,8 +105,13 @@
       <h2>Reclaim storage</h2>
       <button id="refresh-review" class="ghost">Refresh</button>
     </div>
-    <p class="muted">Exact duplicates (same content hash) and stale files. Nothing is deleted — you approve each archive.</p>
-    <div id="review-list"></div>
+    <p class="muted">Exact duplicates (same content hash) and stale files. Nothing is deleted — you approve each archive. Click a row to preview.</p>
+    <h3 class="review-h">Duplicate candidates</h3>
+    <div id="dup-list"></div>
+    <div id="dup-pager" class="pager"></div>
+    <h3 class="review-h">Stale / project-specific</h3>
+    <div id="stale-list"></div>
+    <div id="stale-pager" class="pager"></div>
   </section>
 
   <!-- Storage Scout -->
@@ -121,6 +127,15 @@
 </main>
 
 <div id="toast" class="toast" hidden></div>
+
+<div id="lightbox" class="lightbox" hidden>
+  <div class="lb-backdrop" data-close="1"></div>
+  <div class="lb-panel" role="dialog" aria-modal="true" aria-labelledby="lb-title">
+    <button type="button" class="lb-close" id="lb-close" aria-label="Close">×</button>
+    <div id="lb-media" class="lb-media"></div>
+    <div id="lb-meta" class="lb-meta"></div>
+  </div>
+</div>
 <script src="app.js"></script>
 </body>
 </html>

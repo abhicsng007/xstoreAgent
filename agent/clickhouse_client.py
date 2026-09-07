@@ -15,6 +15,7 @@ import clickhouse_connect
 from clickhouse_connect.driver.client import Client
 
 from .config import get_settings
+from .reusability import reusability_sql_expr
 
 
 def _as_datetime(value: Any) -> datetime:
@@ -290,34 +291,75 @@ def set_status(asset_id: str, status: str, client: Client | None = None) -> None
     )
 
 
-def list_assets(
-    asset_type: str | None = None,
-    status: str | None = None,
-    limit: int = 200,
-    client: Client | None = None,
-) -> list[dict[str, Any]]:
-    """List catalog assets for the dashboard grid, newest first.
-
-    Optional filters by `asset_type` and lifecycle `status`. The embedding vector
-    is intentionally omitted from the payload (large, not needed by the UI).
-    """
-    client = client or get_client()
+def _asset_filters(
+    asset_type: str | None,
+    status: str | None,
+    project: str | None = None,
+) -> tuple[str, dict[str, Any]]:
     where = ["1"]
-    params: dict[str, Any] = {"limit": limit}
+    params: dict[str, Any] = {}
     if asset_type:
         where.append("asset_type = {atype:String}")
         params["atype"] = asset_type
     if status:
         where.append("status = {status:String}")
         params["status"] = status
+    if project:
+        where.append("project = {project:String}")
+        params["project"] = project
+    return " AND ".join(where), params
+
+
+def count_assets(
+    asset_type: str | None = None,
+    status: str | None = None,
+    project: str | None = None,
+    client: Client | None = None,
+) -> int:
+    """Row count matching the dashboard list filters."""
+    client = client or get_client()
+    where, params = _asset_filters(asset_type, status, project)
+    result = client.query(
+        f"SELECT count() FROM assets WHERE {where}",
+        parameters=params,
+    )
+    return int(result.result_rows[0][0]) if result.result_rows else 0
+
+
+def list_assets(
+    asset_type: str | None = None,
+    status: str | None = None,
+    project: str | None = None,
+    limit: int = 24,
+    offset: int = 0,
+    sort: str = "reusability",
+    client: Client | None = None,
+) -> list[dict[str, Any]]:
+    """List catalog assets for the dashboard grid.
+
+    Optional filters by `asset_type` and lifecycle `status`. The embedding vector
+    is intentionally omitted from the payload (large, not needed by the UI).
+    `sort` is `reusability` (default) or `newest`.
+    """
+    client = client or get_client()
+    where, params = _asset_filters(asset_type, status, project)
+    params["limit"] = max(1, min(int(limit), 100))
+    params["offset"] = max(0, int(offset))
+    score_sql = reusability_sql_expr()
+    order = (
+        "reusability_score DESC, created_at DESC"
+        if sort == "reusability"
+        else "created_at DESC"
+    )
     result = client.query(
         f"""
-        SELECT toString(id) AS id, filename, asset_type, asset_subtype, ext,
-               size_bytes, created_at, project, caption, tags, reusable, status
+        SELECT toString(id) AS id, path, filename, asset_type, asset_subtype, ext,
+               size_bytes, created_at, project, caption, tags, reusable, status,
+               {score_sql} AS reusability_score
         FROM assets
-        WHERE {' AND '.join(where)}
-        ORDER BY created_at DESC
-        LIMIT {{limit:UInt32}}
+        WHERE {where}
+        ORDER BY {order}
+        LIMIT {{limit:UInt32}} OFFSET {{offset:UInt32}}
         """,
         parameters=params,
     )
@@ -351,12 +393,14 @@ def ping() -> bool:
 def get_asset(asset_id: str, client: Client | None = None) -> dict[str, Any] | None:
     """Fetch one catalog row (including source path) for previews."""
     client = client or get_client()
+    score_sql = reusability_sql_expr()
     result = client.query(
-        """
-        SELECT toString(id) AS id, path, filename, asset_type, ext,
-               size_bytes, caption, tags, reusable, status
+        f"""
+        SELECT toString(id) AS id, path, filename, asset_type, asset_subtype, ext,
+               size_bytes, created_at, project, caption, tags, reusable, status,
+               {score_sql} AS reusability_score
         FROM assets
-        WHERE toString(id) = {id:String}
+        WHERE toString(id) = {{id:String}}
         LIMIT 1
         """,
         parameters={"id": str(asset_id)},

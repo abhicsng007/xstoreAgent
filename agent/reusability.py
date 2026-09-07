@@ -46,3 +46,22 @@ def reusability_score(
     if not reusable:
         score = min(score, _UNIQUE_CAP)
     return int(score)
+
+
+def reusability_sql_expr() -> str:
+    """ClickHouse expression matching `reusability_score` for ORDER BY / SELECT.
+
+    Identifiers only — safe to interpolate into a query.
+    """
+    subtype_cases = ", ".join(
+        f"asset_subtype = '{k}', {v}" for k, v in _SUBTYPE_SCORE.items()
+    )
+    type_cases = ", ".join(
+        f"asset_type = '{k}', {v}" for k, v in _TYPE_SCORE.items() if k != "other"
+    )
+    default = _TYPE_SCORE["other"]
+    base = (
+        f"multiIf({subtype_cases}, "
+        f"multiIf({type_cases}, {default}))"
+    )
+    return f"if(reusable, {base}, least({base}, {_UNIQUE_CAP}))"
