@@ -219,12 +219,25 @@ def forget_local(asset_id: str) -> dict[str, Any]:
 
 def recommend() -> list[dict[str, Any]]:
     """Scout-style actions: delete extras, archive stale, offload, fetch."""
-    ch.ensure_schema()
+    try:
+        ch.ensure_schema()
+    except Exception as exc:  # noqa: BLE001
+        return [{"action": "error", "title": "Catalog unavailable",
+                 "detail": str(exc)[:180]}]
     recs: list[dict[str, Any]] = []
-    vendors = ch.list_vendors()
-    watched = ch.list_watched()
+    try:
+        vendors = ch.list_vendors()
+        watched = ch.list_watched()
+    except Exception as exc:  # noqa: BLE001
+        return [{"action": "error", "title": "Cloud tables unavailable",
+                 "detail": str(exc)[:180]}]
 
-    dups = ch.find_duplicates()
+    try:
+        dups = ch.find_duplicates()
+    except Exception as exc:  # noqa: BLE001
+        dups = []
+        recs.append({"action": "error", "title": "Duplicate scan skipped",
+                     "detail": str(exc)[:160]})
     exact = [d for d in dups if d.get("kind") == "exact"][:8]
     if exact:
         recs.append({
@@ -281,7 +294,10 @@ def recommend() -> list[dict[str, Any]]:
         })
 
     new_in_watch = 0
-    memory = ch.hash_index()
+    try:
+        memory = ch.hash_index()
+    except Exception:  # noqa: BLE001
+        memory = {}
     for folder in watched:
         path = folder.get("path") or ""
         if not os.path.isdir(path):

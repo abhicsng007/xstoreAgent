@@ -126,7 +126,16 @@
 
     <h3 class="review-h">Connected vendors</h3>
     <form id="vendor-form" class="search cloud-form">
-      <select id="vendor-kind"></select>
+      <select id="vendor-kind">
+        <option value="mega">MEGA (20 GB)</option>
+        <option value="gdrive">Google Drive (15 GB)</option>
+        <option value="pcloud">pCloud (10 GB)</option>
+        <option value="icedrive">Icedrive (10 GB)</option>
+        <option value="internxt">Internxt (10 GB)</option>
+        <option value="onedrive">Microsoft OneDrive (5 GB)</option>
+        <option value="dropbox">Dropbox (2 GB)</option>
+        <option value="custom">Custom / NAS folder</option>
+      </select>
       <input id="vendor-root" type="text" placeholder="sync folder (MEGA/Drive/Dropbox disk path)" />
       <input id="vendor-label" type="text" placeholder="label (optional)" />
       <button type="submit">Connect</button>

@@ -779,18 +779,37 @@ function startScoutStream() {
 
 document.getElementById("scout-btn").onclick = startScoutStream;
 
-async function loadCloud() {
-  const [presets, vendors, folders, recs] = await Promise.all([
-    api("/api/cloud/presets"),
-    api("/api/cloud/vendors"),
-    api("/api/cloud/folders"),
-    api("/api/cloud/recommend"),
-  ]);
+const VENDOR_FALLBACK = [
+  { vendor: "mega", name: "MEGA", free_gb: 20 },
+  { vendor: "gdrive", name: "Google Drive", free_gb: 15 },
+  { vendor: "pcloud", name: "pCloud", free_gb: 10 },
+  { vendor: "icedrive", name: "Icedrive", free_gb: 10 },
+  { vendor: "internxt", name: "Internxt", free_gb: 10 },
+  { vendor: "onedrive", name: "Microsoft OneDrive", free_gb: 5 },
+  { vendor: "dropbox", name: "Dropbox", free_gb: 2 },
+  { vendor: "custom", name: "Custom / NAS folder", free_gb: 0 },
+];
+
+function fillVendorSelect(presets) {
   const sel = document.getElementById("vendor-kind");
-  if (!sel.options.length) {
-    sel.innerHTML = (presets.presets || []).map((p) =>
-      `<option value="${p.vendor}">${escapeHtml(p.name)} (${p.free_gb} GB)</option>`).join("");
-  }
+  if (!sel) return;
+  const current = sel.value;
+  const list = (presets && presets.length) ? presets : VENDOR_FALLBACK;
+  sel.innerHTML = list.map((p) =>
+    `<option value="${escapeHtml(p.vendor)}">${escapeHtml(p.name)} (${p.free_gb} GB)</option>`).join("");
+  if (current && [...sel.options].some((o) => o.value === current)) sel.value = current;
+}
+
+async function loadCloud() {
+  let presets = { presets: VENDOR_FALLBACK };
+  let vendors = { vendors: [] };
+  let folders = { folders: [] };
+  let recs = { recommendations: [] };
+  try { presets = await api("/api/cloud/presets"); } catch { /* keep fallback */ }
+  fillVendorSelect(presets.presets);
+  try { vendors = await api("/api/cloud/vendors"); } catch (err) { console.warn(err); }
+  try { folders = await api("/api/cloud/folders"); } catch (err) { console.warn(err); }
+  try { recs = await api("/api/cloud/recommend"); } catch (err) { console.warn(err); }
   const vbox = document.getElementById("vendor-list");
   const vs = vendors.vendors || [];
   vbox.innerHTML = vs.length ? vs.map((v) => `
@@ -1076,6 +1095,7 @@ document.addEventListener("keydown", (e) => {
 // --- Boot ---
 (async function boot() {
   try {
+    fillVendorSelect(VENDOR_FALLBACK);
     await loadHealth();
     await loadLibrary();
     await loadStorage();
