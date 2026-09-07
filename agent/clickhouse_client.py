@@ -34,6 +34,7 @@ _ASSETS_COLUMNS = [
     "id", "path", "filename", "asset_type", "asset_subtype", "ext", "size_bytes",
     "created_at", "project", "caption", "tags", "reusable", "status",
     "content_hash", "embedding", "visual_embedding",
+    "location", "vendor", "analyzed",
 ]
 
 _EVENT_COLUMNS = ["asset_id", "event", "project", "bytes", "detail"]
@@ -79,7 +80,10 @@ def ensure_schema(client: Client | None = None) -> None:
             status LowCardinality(String) DEFAULT 'active',
             content_hash String DEFAULT '',
             embedding Array(Float32) DEFAULT [],
-            visual_embedding Array(Float32) DEFAULT []
+            visual_embedding Array(Float32) DEFAULT [],
+            location LowCardinality(String) DEFAULT 'local',
+            vendor String DEFAULT '',
+            analyzed LowCardinality(String) DEFAULT 'gemini-media'
         )
         ENGINE = MergeTree ORDER BY (asset_type, created_at)
         """
@@ -93,6 +97,18 @@ def ensure_schema(client: Client | None = None) -> None:
     client.command(
         f"ALTER TABLE {s.ch_database}.assets "
         f"ADD COLUMN IF NOT EXISTS visual_embedding Array(Float32) DEFAULT []"
+    )
+    client.command(
+        f"ALTER TABLE {s.ch_database}.assets "
+        f"ADD COLUMN IF NOT EXISTS location LowCardinality(String) DEFAULT 'local'"
+    )
+    client.command(
+        f"ALTER TABLE {s.ch_database}.assets "
+        f"ADD COLUMN IF NOT EXISTS vendor String DEFAULT ''"
+    )
+    client.command(
+        f"ALTER TABLE {s.ch_database}.assets "
+        f"ADD COLUMN IF NOT EXISTS analyzed LowCardinality(String) DEFAULT 'gemini-media'"
     )
     client.command(
         f"""
@@ -117,6 +133,48 @@ def ensure_schema(client: Client | None = None) -> None:
             embedding Array(Float32)
         )
         ENGINE = MergeTree ORDER BY ts
+        """
+    )
+    client.command(
+        f"""
+        CREATE TABLE IF NOT EXISTS {s.ch_database}.cloud_vendors
+        (
+            id UUID DEFAULT generateUUIDv4(),
+            vendor LowCardinality(String),
+            label String,
+            root String,
+            free_gb Float32 DEFAULT 0,
+            url String DEFAULT '',
+            status LowCardinality(String) DEFAULT 'connected',
+            created_at DateTime DEFAULT now()
+        )
+        ENGINE = MergeTree ORDER BY created_at
+        """
+    )
+    client.command(
+        f"""
+        CREATE TABLE IF NOT EXISTS {s.ch_database}.watched_folders
+        (
+            id UUID DEFAULT generateUUIDv4(),
+            path String,
+            project String DEFAULT '',
+            created_at DateTime DEFAULT now()
+        )
+        ENGINE = MergeTree ORDER BY created_at
+        """
+    )
+    client.command(
+        f"""
+        CREATE TABLE IF NOT EXISTS {s.ch_database}.asset_locations
+        (
+            ts DateTime DEFAULT now(),
+            asset_id UUID,
+            path String,
+            vendor String DEFAULT '',
+            kind LowCardinality(String) DEFAULT 'local',
+            present UInt8 DEFAULT 1
+        )
+        ENGINE = MergeTree ORDER BY (asset_id, ts)
         """
     )
 
@@ -146,6 +204,9 @@ def insert_assets(rows: list[dict[str, Any]], client: Client | None = None) -> i
             r.get("content_hash", ""),
             [float(x) for x in r.get("embedding", [])],
             [float(x) for x in r.get("visual_embedding", [])],
+            r.get("location", "local"),
+            r.get("vendor", ""),
+            r.get("analyzed", "gemini-media"),
         ])
     client.insert(
         table="assets",
@@ -159,11 +220,28 @@ def insert_assets(rows: list[dict[str, Any]], client: Client | None = None) -> i
 def existing_hashes(client: Client | None = None) -> set[str]:
     """Content hashes already in the catalog — ingest skips these so a folder
     can be re-pointed at without paying Gemini twice or duplicating rows."""
+    return set(hash_index(client=client).keys())
+
+
+def hash_index(client: Client | None = None) -> dict[str, dict[str, Any]]:
+    """content_hash -> canonical catalog row (caption/tags/vectors). One per hash."""
     client = client or get_client()
     result = client.query(
-        "SELECT DISTINCT content_hash FROM assets WHERE content_hash != ''"
+        """
+        SELECT content_hash, toString(id) AS id, caption, tags, asset_type,
+               asset_subtype, reusable, status, path, analyzed
+        FROM assets
+        WHERE content_hash != ''
+        ORDER BY created_at ASC
+        """
     )
-    return {row[0] for row in result.result_rows if row[0]}
+    out: dict[str, dict[str, Any]] = {}
+    for row in result.result_rows:
+        rec = dict(zip(result.column_names, row))
+        h = rec.get("content_hash") or ""
+        if h and h not in out:
+            out[h] = rec
+    return out
 
 
 def repurpose_search(
@@ -365,6 +443,7 @@ def list_assets(
         f"""
         SELECT toString(id) AS id, path, filename, asset_type, asset_subtype, ext,
                size_bytes, created_at, project, caption, tags, reusable, status,
+               location, vendor, analyzed,
                {score_sql} AS reusability_score
         FROM assets
         WHERE {where}
@@ -408,6 +487,7 @@ def get_asset(asset_id: str, client: Client | None = None) -> dict[str, Any] | N
         f"""
         SELECT toString(id) AS id, path, filename, asset_type, asset_subtype, ext,
                size_bytes, created_at, project, caption, tags, reusable, status,
+               content_hash, location, vendor, analyzed,
                {score_sql} AS reusability_score
         FROM assets
         WHERE toString(id) = {{id:String}}
@@ -452,4 +532,123 @@ def insert_brief(brief: str, embedding: list[float], client: Client | None = Non
         data=[[brief[:2000], [float(x) for x in embedding]]],
         column_names=_BRIEF_COLUMNS,
         database=get_settings().ch_database,
+    )
+
+
+def add_location(
+    asset_id: str, path: str, vendor: str = "", kind: str = "local",
+    present: bool = True, client: Client | None = None,
+) -> None:
+    client = client or get_client()
+    client.insert(
+        table="asset_locations",
+        data=[[str(asset_id), path[:1000], vendor[:80], kind, 1 if present else 0]],
+        column_names=["asset_id", "path", "vendor", "kind", "present"],
+        database=get_settings().ch_database,
+    )
+
+
+def list_locations(asset_id: str, client: Client | None = None) -> list[dict[str, Any]]:
+    client = client or get_client()
+    result = client.query(
+        """
+        SELECT ts, toString(asset_id) AS asset_id, path, vendor, kind, present
+        FROM asset_locations
+        WHERE toString(asset_id) = {id:String}
+        ORDER BY ts DESC
+        LIMIT 20
+        """,
+        parameters={"id": str(asset_id)},
+    )
+    return [dict(zip(result.column_names, row)) for row in result.result_rows]
+
+
+def patch_asset(asset_id: str, fields: dict[str, Any], client: Client | None = None) -> None:
+    """Lightweight mutation for location/vendor/status/path."""
+    allowed = {"status", "location", "vendor", "path", "analyzed"}
+    client = client or get_client()
+    db = get_settings().ch_database
+    for key, value in fields.items():
+        if key not in allowed:
+            continue
+        client.command(
+            f"ALTER TABLE {db}.assets UPDATE {key} = {{v:String}} "
+            f"WHERE id = {{id:UUID}}",
+            parameters={"v": str(value), "id": str(asset_id)},
+        )
+
+
+def list_vendors(client: Client | None = None) -> list[dict[str, Any]]:
+    client = client or get_client()
+    result = client.query(
+        """
+        SELECT toString(id) AS id, vendor, label, root, free_gb, url, status, created_at
+        FROM cloud_vendors
+        WHERE status != 'deleted'
+        ORDER BY created_at DESC
+        """
+    )
+    return [dict(zip(result.column_names, row)) for row in result.result_rows]
+
+
+def insert_vendor(row: dict[str, Any], client: Client | None = None) -> str:
+    client = client or get_client()
+    vid = row.get("id") or str(uuid4())
+    client.insert(
+        table="cloud_vendors",
+        data=[[
+            vid,
+            row.get("vendor", "custom"),
+            row.get("label", "")[:80],
+            row.get("root", "")[:500],
+            float(row.get("free_gb") or 0),
+            row.get("url", "")[:200],
+            row.get("status", "connected"),
+        ]],
+        column_names=["id", "vendor", "label", "root", "free_gb", "url", "status"],
+        database=get_settings().ch_database,
+    )
+    return vid
+
+
+def delete_vendor(vendor_id: str, client: Client | None = None) -> None:
+    client = client or get_client()
+    db = get_settings().ch_database
+    client.command(
+        f"ALTER TABLE {db}.cloud_vendors UPDATE status = {{s:String}} "
+        f"WHERE id = {{id:UUID}}",
+        parameters={"s": "deleted", "id": str(vendor_id)},
+    )
+
+
+def list_watched(client: Client | None = None) -> list[dict[str, Any]]:
+    client = client or get_client()
+    result = client.query(
+        """
+        SELECT toString(id) AS id, path, project, created_at
+        FROM watched_folders
+        ORDER BY created_at DESC
+        """
+    )
+    return [dict(zip(result.column_names, row)) for row in result.result_rows]
+
+
+def insert_watched(path: str, project: str = "", client: Client | None = None) -> str:
+    client = client or get_client()
+    wid = str(uuid4())
+    client.insert(
+        table="watched_folders",
+        data=[[wid, path[:500], project[:80]]],
+        column_names=["id", "path", "project"],
+        database=get_settings().ch_database,
+    )
+    return wid
+
+
+def delete_watched(folder_id: str, client: Client | None = None) -> None:
+    client = client or get_client()
+    db = get_settings().ch_database
+    client.command(
+        f"ALTER TABLE {db}.watched_folders DELETE WHERE id = {{id:UUID}}",
+        parameters={"id": str(folder_id)},
     )

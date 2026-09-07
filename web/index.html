@@ -120,9 +120,29 @@
       <h2>🛰️ Storage Scout</h2>
       <button id="scout-btn" class="ghost">Scout free storage</button>
     </div>
-    <p class="muted">Watches plan usage and can live-search the web for free-tier cloud storage.</p>
+    <p class="muted">Finds free-tier vendors, connects their <b>local sync folders</b>, organizes captioned packs (no re-watching video), and recommends offload / fetch / archive. Catalog memory is sha256 + sidecar text.</p>
     <div id="storage-meter" class="storage-meter"></div>
     <div id="scout-results" class="results-grid"></div>
+
+    <h3 class="review-h">Connected vendors</h3>
+    <form id="vendor-form" class="search cloud-form">
+      <select id="vendor-kind"></select>
+      <input id="vendor-root" type="text" placeholder="sync folder (MEGA/Drive/Dropbox disk path)" />
+      <input id="vendor-label" type="text" placeholder="label (optional)" />
+      <button type="submit">Connect</button>
+    </form>
+    <div id="vendor-list"></div>
+
+    <h3 class="review-h">Watched folders</h3>
+    <form id="watch-form" class="search cloud-form">
+      <input id="watch-path" type="text" placeholder="folder the Scout should keep catalogued" />
+      <input id="watch-project" type="text" placeholder="project (optional)" />
+      <button type="submit">Watch</button>
+    </form>
+    <div id="watch-list"></div>
+
+    <h3 class="review-h">Recommendations</h3>
+    <div id="cloud-recs"></div>
   </section>
 </main>
 

@@ -20,8 +20,9 @@ from collections.abc import Iterator
 from uuid import uuid4
 
 from .. import clickhouse_client as ch
+from ..sidecar import read_sidecar, write_sidecar
 from .classify import classify_asset
-from .embed import EMBED_DIM, embed_asset, embed_image, embed_video
+from .embed import EMBED_DIM, embed_asset, embed_image, embed_text, embed_video
 from .scan import scan_folder, summarize
 
 # The sub-agents the pipeline is narrated as. Each maps to a real pipeline stage,
@@ -55,6 +56,10 @@ def ingest_folder_events(
     `summary` matches exactly what `ingest_folder` returns.
     """
     yield {"type": "start", "root": root, "project": project}
+    try:
+        ch.ensure_schema()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ingest] ensure_schema: {exc}")
 
     # --- Scanner: walk the folder and segregate by type -------------------------
     yield _step(SCANNER, "working", "Walking the folder",
@@ -62,11 +67,19 @@ def ingest_folder_events(
     assets = scan_folder(root, compute_hash=True)
     skipped = [a for a in assets if a.size_bytes == 0]
     assets = [a for a in assets if a.size_bytes > 0]
-    known = ch.existing_hashes()
-    already = [a for a in assets if a.content_hash and a.content_hash in known]
-    assets = [a for a in assets if not (a.content_hash and a.content_hash in known)]
+    memory = ch.hash_index()
+    already = [a for a in assets if a.content_hash and a.content_hash in memory]
+    assets = [a for a in assets if not (a.content_hash and a.content_hash in memory)]
     if limit:
         assets = assets[:limit]
+    remembered = 0
+    for a in already:
+        rec = memory.get(a.content_hash) or {}
+        try:
+            ch.add_location(rec["id"], a.path, kind="local")
+            remembered += 1
+        except Exception as exc:  # noqa: BLE001
+            print(f"[ingest] location skip {a.filename}: {exc}")
 
     summary = summarize(assets)
     by_type = summary["by_type"]
@@ -75,7 +88,11 @@ def ingest_folder_events(
     if skipped:
         extra.append(f"skipped {len(skipped)} empty")
     if already:
-        extra.append(f"{len(already)} already in the library")
+        extra.append(
+            f"{len(already)} already catalogued (memory hit, no re-analysis"
+            + (f", {remembered} new paths remembered" if remembered else "")
+            + ")"
+        )
     if summary["needs_review"]:
         extra.append(f"{summary['needs_review']} need a closer look")
     n_seen = len(assets) + len(already)
@@ -89,39 +106,66 @@ def ingest_folder_events(
     # --- Per-file: Curator judges, Memory embeds --------------------------------
     rows: list[dict] = []
     reusable_n = stale_n = 0
+    sidecar_n = 0
     for i, a in enumerate(assets, 1):
-        yield _step(CURATOR, "working", f"Inspecting {a.filename}",
-                    f"[{i}/{len(assets)}] Asking Gemini to caption it and judge reuse…")
-        meta = classify_asset(a.path, a.asset_type, a.ext)
+        side = read_sidecar(a.path)
+        if side and (side.get("caption") or "").strip():
+            sidecar_n += 1
+            yield _step(CURATOR, "working", f"Reading sidecar for {a.filename}",
+                        f"[{i}/{len(assets)}] Caption on disk — skipping video/audio analysis…")
+            meta = {
+                "caption": side.get("caption", ""),
+                "tags": list(side.get("tags") or []),
+                "asset_subtype": side.get("asset_subtype", ""),
+                "reusable": bool(side.get("reusable", True)),
+                "reason": side.get("reason", "from .xstore.json sidecar"),
+                "refined_type": side.get("asset_type") or a.asset_type,
+            }
+            analyzed = "text-sidecar"
+            yield _step(CURATOR, "done", f"{a.filename} → sidecar",
+                        f"“{meta['caption']}” — no Gemini watch/listen",
+                        data={"filename": a.filename, "caption": meta["caption"]})
+        else:
+            yield _step(CURATOR, "working", f"Inspecting {a.filename}",
+                        f"[{i}/{len(assets)}] Asking Gemini to caption it and judge reuse…")
+            meta = classify_asset(a.path, a.asset_type, a.ext)
+            analyzed = "gemini-media"
+            yield _step(CURATOR, "done",
+                        f"{a.filename} → {'reusable' if meta.get('reusable', True) else 'project-specific'}",
+                        f"“{meta.get('caption', '')}” — {meta.get('reason', '')}".strip(" —"),
+                        data={"filename": a.filename, "caption": meta.get("caption", "")})
+
         asset_type = meta.get("refined_type", a.asset_type) if a.needs_review else a.asset_type
+        if side and side.get("asset_type") in ("image", "icon", "vector", "video", "audio"):
+            asset_type = side.get("asset_type") or asset_type
         caption = meta.get("caption", "")
         reusable = bool(meta.get("reusable", True))
         reusable_n += reusable
         stale_n += (not reusable)
-        verdict = "reusable" if reusable else "project-specific"
-        yield _step(CURATOR, "done", f"{a.filename} → {verdict}",
-                    f"“{caption}” — {meta.get('reason', '')}".strip(" —"),
-                    data={"filename": a.filename, "asset_type": asset_type,
-                          "reusable": reusable, "caption": caption})
 
         yield _step(MEMORY, "working", f"Embedding {a.filename}",
-                    "Projecting its meaning into the shared vector space…")
+                    "Caption text → search vector"
+                    + ("" if analyzed == "text-sidecar" else " · visual vector if media"))
         embedding = embed_asset(asset_type, a.path, caption=caption)
+        if not embedding and caption:
+            try:
+                embedding = embed_text(caption)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[ingest] text embed skipped for {a.filename}: {exc}")
         got = bool(embedding)
-        # True visual (multimodal) vector for image/video — powers visual
-        # near-duplicate detection. Skipped gracefully on unreadable/stub media.
         visual: list[float] = []
-        if asset_type in ("image", "video"):
+        if analyzed != "text-sidecar" and asset_type in ("image", "video"):
             try:
                 visual = (embed_video if asset_type == "video" else embed_image)(
                     a.path, contextual_text=caption
                 )
-            except Exception as exc:  # noqa: BLE001 — caption vector still stored
+            except Exception as exc:  # noqa: BLE001
                 print(f"[ingest] visual embed skipped for {a.filename}: {exc}")
         yield _step(MEMORY, "done",
                     f"{a.filename} vectorized" if got else f"{a.filename} stored (no vector)",
                     (f"{len(embedding)}-d caption vector"
                      + (f" + {len(visual)}-d visual vector" if visual else "")
+                     + (" · text-only" if analyzed == "text-sidecar" else "")
                      + " queued for ClickHouse") if got
                     else f"embedding unavailable — metadata still catalogued (dim {EMBED_DIM})",
                     data={"filename": a.filename, "dims": len(embedding),
@@ -139,8 +183,13 @@ def ingest_folder_events(
             status="stale" if not reusable else "active",
             embedding=embedding,
             visual_embedding=visual,
+            location="local",
+            vendor="",
+            analyzed=analyzed,
         )
         rows.append(row)
+        if analyzed == "gemini-media":
+            write_sidecar(a.path, {**row, "reason": meta.get("reason", "")})
 
     # --- Memory: commit to ClickHouse -------------------------------------------
     yield _step(MEMORY, "working", "Writing to ClickHouse",
@@ -186,6 +235,7 @@ def ingest_folder_events(
         "scanned": len(assets) + len(already),
         "skipped_empty": len(skipped),
         "skipped_existing": len(already),
+        "sidecar_text": sidecar_n,
         "inserted": inserted,
         "summary": summary,
     }

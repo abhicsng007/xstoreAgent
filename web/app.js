@@ -722,12 +722,14 @@ async function loadStorage() {
 
 function providerCard(p, top = false) {
   const src = p.source === "web" ? `<span class="psrc web">web</span>` : `<span class="psrc fallback">fallback</span>`;
-  const link = p.url ? `<a href="${p.url}" target="_blank" rel="noopener noreferrer">${p.url}</a>` : "";
+  const link = p.url ? `<a href="${p.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(p.url)}</a>` : "";
+  const key = (p.vendor || p.name || "").toLowerCase().replace(/\s+/g, "");
   return `<div class="provider ${top ? "top" : ""}">
-      <div class="pname">${p.name} ${src}</div>
+      <div class="pname">${escapeHtml(p.name || "")} ${src}</div>
       <div><span class="gb">${p.free_gb} GB free</span></div>
-      <div class="pnote">${p.note || ""}</div>
+      <div class="pnote">${escapeHtml(p.note || "")}</div>
       ${link}
+      <button type="button" class="small ghost connect-vendor" data-vendor="${escapeHtml(p.vendor || key)}" data-name="${escapeHtml(p.name || "")}" data-gb="${p.free_gb || 0}" data-url="${escapeHtml(p.url || "")}">Connect sync folder</button>
     </div>`;
 }
 
@@ -768,10 +770,148 @@ function startScoutStream() {
       es.close();
     }
   };
-  es.onerror = () => { status.textContent = "connection closed."; es.close(); };
+  es.onerror = () => {
+    if (status.textContent.startsWith("done")) { es.close(); return; }
+    status.textContent = "connection closed.";
+    es.close();
+  };
 }
 
 document.getElementById("scout-btn").onclick = startScoutStream;
+
+async function loadCloud() {
+  const [presets, vendors, folders, recs] = await Promise.all([
+    api("/api/cloud/presets"),
+    api("/api/cloud/vendors"),
+    api("/api/cloud/folders"),
+    api("/api/cloud/recommend"),
+  ]);
+  const sel = document.getElementById("vendor-kind");
+  if (!sel.options.length) {
+    sel.innerHTML = (presets.presets || []).map((p) =>
+      `<option value="${p.vendor}">${escapeHtml(p.name)} (${p.free_gb} GB)</option>`).join("");
+  }
+  const vbox = document.getElementById("vendor-list");
+  const vs = vendors.vendors || [];
+  vbox.innerHTML = vs.length ? vs.map((v) => `
+    <div class="dup">
+      <div class="pair">
+        <div><b>${escapeHtml(v.label || v.vendor)}</b> · ${escapeHtml(v.vendor)} · ${v.free_gb} GB</div>
+        <div class="dist">${escapeHtml(v.root || "")}</div>
+      </div>
+      <div class="actions">
+        <button class="small ghost" data-organize="${v.id}">Organize pack</button>
+        <button class="small ghost" data-offload="${v.id}">Offload reusable</button>
+        <button class="small danger" data-drop-vendor="${v.id}">Disconnect</button>
+      </div>
+    </div>`).join("") : `<div class="empty">No vendors connected. Scout, then Connect a sync folder.</div>`;
+
+  const fbox = document.getElementById("watch-list");
+  const fs = folders.folders || [];
+  fbox.innerHTML = fs.length ? fs.map((f) => `
+    <div class="dup">
+      <div class="pair">
+        <div><b>${escapeHtml(f.path)}</b></div>
+        <div class="dist">${escapeHtml(f.project || "no project tag")}</div>
+      </div>
+      <div class="actions">
+        <button class="small ghost" data-scan="${f.id}">Scan now</button>
+        <button class="small danger" data-drop-folder="${f.id}">Unwatch</button>
+      </div>
+    </div>`).join("") : `<div class="empty">No watched folders. Add a directory the Scout should keep in the catalog.</div>`;
+
+  const rbox = document.getElementById("cloud-recs");
+  const rs = recs.recommendations || [];
+  rbox.innerHTML = rs.length ? rs.map((r) => `
+    <div class="dup">
+      <div class="pair">
+        <div><b>${escapeHtml(r.title || r.action)}</b></div>
+        <div class="dist">${escapeHtml(r.detail || "")}</div>
+      </div>
+    </div>`).join("") : `<div class="empty">No recommendations yet.</div>`;
+}
+
+document.getElementById("vendor-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const vendor = document.getElementById("vendor-kind").value;
+  const root = document.getElementById("vendor-root").value.trim();
+  const label = document.getElementById("vendor-label").value.trim();
+  try {
+    await api("/api/cloud/vendors", {
+      method: "POST",
+      body: JSON.stringify({ vendor, root, label }),
+    });
+    toast("Vendor connected.");
+    document.getElementById("vendor-root").value = "";
+    loadCloud();
+  } catch (err) { toast(err.message, 5000); }
+};
+
+document.getElementById("watch-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const path = document.getElementById("watch-path").value.trim();
+  const project = document.getElementById("watch-project").value.trim();
+  if (!path) return toast("Enter a folder path to watch.");
+  try {
+    await api("/api/cloud/folders", {
+      method: "POST",
+      body: JSON.stringify({ path, project }),
+    });
+    toast("Folder watched.");
+    document.getElementById("watch-path").value = "";
+    loadCloud();
+  } catch (err) { toast(err.message, 5000); }
+};
+
+document.getElementById("storage-card").addEventListener("click", async (e) => {
+  const t = e.target.closest("button");
+  if (!t) return;
+  try {
+    if (t.classList.contains("connect-vendor")) {
+      document.getElementById("vendor-kind").value = t.dataset.vendor || "custom";
+      document.getElementById("vendor-label").value = t.dataset.name || "";
+      document.getElementById("vendor-root").focus();
+      toast("Set the sync folder path, then Connect.");
+      return;
+    }
+    if (t.dataset.organize) {
+      toast("Organizing captioned pack…");
+      const r = await api("/api/cloud/organize", {
+        method: "POST", body: JSON.stringify({ vendor_id: t.dataset.organize }),
+      });
+      toast(`Organized ${r.copied || 0} files → ${r.dest || "vendor folder"}`);
+      loadCloud();
+      return;
+    }
+    if (t.dataset.offload) {
+      toast("Offloading reusable media…");
+      const r = await api("/api/cloud/offload", {
+        method: "POST", body: JSON.stringify({ vendor_id: t.dataset.offload }),
+      });
+      toast(`Offloaded ${r.copied || r.offloaded || 0} files (sidecars written, no re-analysis later)`);
+      loadCloud(); loadLibrary();
+      return;
+    }
+    if (t.dataset.dropVendor) {
+      await api(`/api/cloud/vendors/${t.dataset.dropVendor}`, { method: "DELETE" });
+      toast("Disconnected.");
+      loadCloud();
+      return;
+    }
+    if (t.dataset.scan) {
+      toast("Scanning watched folder (memory skips Gemini on known hashes)…");
+      const r = await api(`/api/cloud/folders/${t.dataset.scan}/scan`, { method: "POST" });
+      toast(`Scan: ${r.inserted || 0} new · ${r.skipped_existing || 0} remembered · ${r.sidecar_text || 0} from sidecars`);
+      loadLibrary(); loadCloud();
+      return;
+    }
+    if (t.dataset.dropFolder) {
+      await api(`/api/cloud/folders/${t.dataset.dropFolder}`, { method: "DELETE" });
+      toast("Unwatched.");
+      loadCloud();
+    }
+  } catch (err) { toast(err.message, 5000); }
+});
 
 // --- Review ---
 function reviewThumb(id, has, type) {
@@ -940,5 +1080,6 @@ document.addEventListener("keydown", (e) => {
     await loadLibrary();
     await loadStorage();
     await loadReview();
+    await loadCloud();
   } catch (err) { toast(`Backend not reachable: ${err.message}`, 6000); }
 })();

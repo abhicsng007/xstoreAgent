@@ -21,7 +21,10 @@ CREATE TABLE IF NOT EXISTS xstoreAgent.assets
     status        LowCardinality(String) DEFAULT 'active',  -- active | duplicate | stale | archived
     content_hash  String DEFAULT '',              -- sha256 for exact-dup GROUP BY
     embedding     Array(Float32) DEFAULT [],      -- gemini-embedding-001 of the caption (search)
-    visual_embedding Array(Float32) DEFAULT []    -- multimodalembedding@001 of image/video pixels (visual near-dup)
+    visual_embedding Array(Float32) DEFAULT [],   -- multimodalembedding@001 of image/video pixels (visual near-dup)
+    location      LowCardinality(String) DEFAULT 'local', -- local | cloud | both
+    vendor        String DEFAULT '',
+    analyzed      LowCardinality(String) DEFAULT 'gemini-media' -- gemini-media | text-sidecar
 )
 ENGINE = MergeTree
 ORDER BY (asset_type, created_at);
@@ -46,6 +49,42 @@ CREATE TABLE IF NOT EXISTS xstoreAgent.brief_queries
 )
 ENGINE = MergeTree
 ORDER BY ts;
+
+CREATE TABLE IF NOT EXISTS xstoreAgent.cloud_vendors
+(
+    id         UUID DEFAULT generateUUIDv4(),
+    vendor     LowCardinality(String),
+    label      String,
+    root       String,
+    free_gb    Float32 DEFAULT 0,
+    url        String DEFAULT '',
+    status     LowCardinality(String) DEFAULT 'connected',
+    created_at DateTime DEFAULT now()
+)
+ENGINE = MergeTree
+ORDER BY created_at;
+
+CREATE TABLE IF NOT EXISTS xstoreAgent.watched_folders
+(
+    id         UUID DEFAULT generateUUIDv4(),
+    path       String,
+    project    String DEFAULT '',
+    created_at DateTime DEFAULT now()
+)
+ENGINE = MergeTree
+ORDER BY created_at;
+
+CREATE TABLE IF NOT EXISTS xstoreAgent.asset_locations
+(
+    ts       DateTime DEFAULT now(),
+    asset_id UUID,
+    path     String,
+    vendor   String DEFAULT '',
+    kind     LowCardinality(String) DEFAULT 'local',
+    present  UInt8 DEFAULT 1
+)
+ENGINE = MergeTree
+ORDER BY (asset_id, ts);
 
 -- Library rollup (agent: run_select_query):
 --   SELECT asset_type, count() AS n, sum(size_bytes) AS bytes, countIf(reusable) AS reusable

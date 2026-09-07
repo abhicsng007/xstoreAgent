@@ -160,8 +160,15 @@ def _scout_instruction() -> str:
 user asks where to offload media, use Google Search to find cloud-storage
 providers with a FREE tier suitable for large media (video/images/audio). Return
 5-7 options ranked by free capacity: name, free GB, a short suitability note, and
-the signup URL. Prefer current, well-known providers. Answer directly; do not
-transfer back."""
+the signup URL. Prefer current, well-known providers.
+
+Also explain: xStoreAgent connects those vendors via their *local sync folder*
+(MEGA/Drive/Dropbox/pCloud desktop apps). After connecting, the app organizes
+files into captioned folders with .xstore.json sidecars so a later ingest never
+re-watches video — catalog memory (sha256 + caption) is enough. Recommend
+offloading reusable B-roll, fetching offloaded files when a brief needs them,
+and archiving stale/duplicate copies instead of paying to store them. Answer
+directly; do not transfer back."""
 
 
 def _curator_instruction() -> str:

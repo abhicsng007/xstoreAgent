@@ -30,3 +30,4 @@ sample_assets/.cache/
 *.log
 .cache/
 organized/
+cloud_exports/

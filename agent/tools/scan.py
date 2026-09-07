@@ -98,6 +98,8 @@ def scan_folder(root: str, compute_hash: bool = True) -> list[Asset]:
         for name in filenames:
             if name.startswith("."):
                 continue
+            if name.endswith(".xstore.json") or name in ("00-MANIFEST.json", "01-README.txt"):
+                continue
             full = os.path.join(dirpath, name)
             try:
                 stat = os.stat(full)

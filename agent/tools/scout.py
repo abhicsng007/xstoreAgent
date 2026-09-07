@@ -20,6 +20,21 @@ from collections.abc import Iterator
 
 from .. import clickhouse_client as ch
 from ..config import get_settings
+from .cloud import VENDOR_PRESETS
+
+
+def _vendor_key(name: str) -> str:
+    n = (name or "").lower().replace(" ", "")
+    for p in VENDOR_PRESETS:
+        key = p["vendor"]
+        label = p["name"].lower().replace(" ", "")
+        if key in n or label in n or n in label:
+            return key
+    if "google" in n or "drive" in n:
+        return "gdrive"
+    if "one" in n:
+        return "onedrive"
+    return "custom"
 
 # The Scout sub-agent (matches the ingest crew's event shape).
 SCOUT = ("Scout", "\U0001F6F0")  # 🛰️
@@ -77,6 +92,7 @@ def _parse_items(text: str) -> list[dict]:
             gb = 0.0
         items.append({
             "name": str(r["name"])[:60],
+            "vendor": _vendor_key(str(r["name"])),
             "free_gb": round(gb, 1),
             "note": str(r.get("note", ""))[:80],
             "url": str(r.get("url", ""))[:200],
@@ -159,6 +175,7 @@ def scout_storage_events() -> Iterator[dict]:
         items = [dict(i) for i in _FALLBACK]
         for i in items:
             i["source"] = "fallback"
+            i["vendor"] = _vendor_key(i.get("name", ""))
         yield _step("done", f"Surfaced {len(items)} known free tiers",
                     "Live search returned nothing usable; showing a curated fallback.",
                     data={"count": len(items)})

@@ -264,6 +264,12 @@ button.danger { background: var(--danger); color: #2a0000; }
 .provider a { color: var(--accent); font-size: 12.5px; text-decoration: none; word-break: break-all; }
 .provider a:hover { text-decoration: underline; }
 .provider.top { border-color: var(--good); box-shadow: 0 0 0 1px rgba(74,222,128,.25); }
+.cloud-form { margin: 8px 0 12px; flex-wrap: wrap; }
+.cloud-form select {
+  background: var(--bg); border: 1px solid var(--line); color: var(--text);
+  padding: 10px 12px; border-radius: 10px;
+}
+.provider .connect-vendor { margin-top: 8px; align-self: flex-start; }
 
 /* --- Librarian chat --- */
 .chat-log {

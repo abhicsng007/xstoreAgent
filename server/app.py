@@ -33,6 +33,17 @@ from agent.librarian import (
 from agent.reusability import REUSABLE_BAND, reusability_score
 from agent.tools.assemble import assemble_sequence, assemble_sequence_events
 from agent.tools.ingest import ingest_folder, ingest_folder_events
+from agent.tools.cloud import (
+    VENDOR_PRESETS,
+    connect_vendor,
+    default_export_root,
+    fetch_asset,
+    forget_local,
+    offload_assets,
+    organize_to_vendor,
+    recommend,
+    watch_folder,
+)
 from agent.tools.scout import scout_storage_events, storage_status
 from server.preview import (
     attach_preview,
@@ -76,6 +87,29 @@ class ApproveRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     session_id: str = "web"
+
+
+class VendorConnect(BaseModel):
+    vendor: str
+    root: str = ""
+    label: str = ""
+    free_gb: float = 0
+    url: str = ""
+
+
+class WatchRequest(BaseModel):
+    path: str
+    project: str = ""
+
+
+class OffloadRequest(BaseModel):
+    vendor_id: str
+    asset_ids: list[str] = []
+
+
+class FetchRequest(BaseModel):
+    asset_id: str
+    dest: str = ""
 
 
 @app.on_event("startup")
@@ -341,6 +375,105 @@ def api_scout_stream():
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/api/cloud/presets")
+def api_cloud_presets() -> dict:
+    return {"presets": VENDOR_PRESETS}
+
+
+@app.get("/api/cloud/vendors")
+def api_cloud_vendors() -> dict:
+    ch.ensure_schema()
+    return {"vendors": ch.list_vendors()}
+
+
+@app.post("/api/cloud/vendors")
+def api_cloud_connect(req: VendorConnect) -> dict:
+    root = (req.root or "").strip() or default_export_root(req.vendor)
+    try:
+        return connect_vendor(
+            req.vendor, root, label=req.label, free_gb=req.free_gb, url=req.url,
+        )
+    except OSError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.delete("/api/cloud/vendors/{vendor_id}")
+def api_cloud_disconnect(vendor_id: str) -> dict:
+    ch.delete_vendor(vendor_id)
+    return {"ok": True}
+
+
+@app.get("/api/cloud/folders")
+def api_cloud_folders() -> dict:
+    ch.ensure_schema()
+    return {"folders": ch.list_watched()}
+
+
+@app.post("/api/cloud/folders")
+def api_cloud_watch(req: WatchRequest) -> dict:
+    try:
+        return watch_folder(req.path, project=req.project)
+    except FileNotFoundError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.delete("/api/cloud/folders/{folder_id}")
+def api_cloud_unwatch(folder_id: str) -> dict:
+    ch.delete_watched(folder_id)
+    return {"ok": True}
+
+
+@app.post("/api/cloud/folders/{folder_id}/scan")
+def api_cloud_scan(folder_id: str) -> dict:
+    folders = [f for f in ch.list_watched() if f["id"] == folder_id]
+    if not folders:
+        raise HTTPException(404, "unknown folder")
+    folder = folders[0]
+    return ingest_folder(folder["path"], project=folder.get("project") or "")
+
+
+@app.get("/api/cloud/recommend")
+def api_cloud_recommend() -> dict:
+    return {"recommendations": recommend()}
+
+
+@app.post("/api/cloud/organize")
+def api_cloud_organize(req: OffloadRequest) -> dict:
+    try:
+        return organize_to_vendor(req.vendor_id, req.asset_ids or None)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/cloud/offload")
+def api_cloud_offload(req: OffloadRequest) -> dict:
+    ids = req.asset_ids
+    if not ids:
+        # Default: reusable demo-pack files we can actually copy.
+        pack = ch.list_assets(project="demo", limit=50, sort="reusability")
+        ids = [a["id"] for a in pack if a.get("reusable")]
+    try:
+        return offload_assets(req.vendor_id, ids)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/cloud/fetch")
+def api_cloud_fetch(req: FetchRequest) -> dict:
+    try:
+        return fetch_asset(req.asset_id, dest_dir=req.dest or None)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/cloud/forget-local")
+def api_cloud_forget(req: FetchRequest) -> dict:
+    try:
+        return forget_local(req.asset_id)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 # --- Repurpose search ---
