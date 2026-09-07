@@ -706,18 +706,35 @@ async function loadHealth() {
 }
 
 // --- Storage Scout ---
+function fmtStore(bytes) {
+  const gb = bytes / 1024 ** 3;
+  if (gb >= 1024) return (gb / 1024).toFixed(2) + " TB";
+  if (gb >= 1) return gb.toFixed(2) + " GB";
+  return (bytes / 1024 ** 2).toFixed(1) + " MB";
+}
+
 async function loadStorage() {
   const s = await api("/api/storage");
-  const usedGb = (s.used_bytes / 1024 ** 3);
-  const shown = Math.max(s.used_pct, s.used_pct > 0 ? 1.5 : 0);
-  const warn = s.over_threshold;
+  const planBytes = s.plan_gb * 1024 ** 3;
+  const planH = fmtStore(planBytes);
+  const over = s.used_pct > 100;
+  const warn = s.over_threshold || over;
+  // Bar never overflows; when over-plan it stays full and turns to the warn color.
+  const width = Math.min(Math.max(s.used_pct, s.used_pct > 0 ? 1.5 : 0), 100);
+  let lbl;
+  if (s.available === false) {
+    lbl = `<span class="muted">Catalog usage unavailable — Scout can still find free storage.</span>`;
+  } else if (over) {
+    lbl = `<b>${fmtStore(s.used_bytes)}</b> of ${planH} plan ·
+      <b>${(s.used_pct - 100).toFixed(0)}% over</b>
+      <span class="alert">— offload recommended</span>`;
+  } else {
+    lbl = `<b>${fmtStore(s.used_bytes)}</b> of ${planH} plan used · <b>${s.used_pct}%</b>
+      ${warn ? `<span class="alert">— over ${s.warn_pct}%, offload recommended</span>` : ""}`;
+  }
   document.getElementById("storage-meter").innerHTML = `
-    <div class="bar"><div class="fill ${warn ? "warn" : ""}" style="width:${Math.min(shown, 100)}%"></div></div>
-    <div class="lbl">
-      <b>${usedGb < 0.01 ? (s.used_bytes / 1024 ** 2).toFixed(1) + " MB" : usedGb.toFixed(2) + " GB"}</b>
-      of ${s.plan_gb} GB plan used · <b>${s.used_pct}%</b>
-      ${warn ? `<span class="alert">— over ${s.warn_pct}%, offload recommended</span>` : ""}
-    </div>`;
+    <div class="bar"><div class="fill ${warn ? "warn" : ""}" style="width:${width}%"></div></div>
+    <div class="lbl">${lbl}</div>`;
 }
 
 function providerCard(p, top = false) {
@@ -756,7 +773,17 @@ function startScoutStream() {
       crewState["Scout"] = "done";
       renderCrew(null);
       const opts = ev.options || [];
-      results.innerHTML = opts.map((p, i) => providerCard(p, i === 0)).join("");
+      const plan = ev.plan;
+      const planHtml = plan && plan.headline
+        ? `<div class="offload-plan" style="grid-column:1/-1">
+             <div class="plan-head">🛰️ Offload plan</div>
+             <div class="plan-body">${escapeHtml(plan.headline)}</div>
+             ${plan.reusable_count ? `<button type="button" class="small" id="plan-offload">Offload reusable now →</button>` : ""}
+           </div>`
+        : "";
+      results.innerHTML = planHtml + opts.map((p, i) => providerCard(p, i === 0)).join("");
+      const planBtn = document.getElementById("plan-offload");
+      if (planBtn) planBtn.onclick = offloadReusableToBestVendor;
       status.textContent = ev.grounded ? "done · sourced live from the web." : "done.";
       es.close();
       loadStorage();
@@ -847,7 +874,51 @@ async function loadCloud() {
         <div><b>${escapeHtml(r.title || r.action)}</b></div>
         <div class="dist">${escapeHtml(r.detail || "")}</div>
       </div>
+      <div class="actions">${recAction(r)}</div>
     </div>`).join("") : `<div class="empty">No recommendations yet.</div>`;
+}
+
+// One-click action for a Scout recommendation, wired to existing endpoints.
+function recAction(r) {
+  switch (r.action) {
+    case "connect_vendor":
+      return `<button class="small" data-rec="connect_vendor">Connect a vendor</button>`;
+    case "offload_reusable":
+      return `<button class="small" data-rec="offload" data-vendor="${escapeHtml(r.vendor_id || "")}">Offload reusable</button>`;
+    case "organize":
+      return `<button class="small ghost" data-rec="organize" data-vendor="${escapeHtml(r.vendor_id || "")}">Organize pack</button>`;
+    case "fetch":
+      return `<button class="small ghost" data-rec="fetch" data-asset="${escapeHtml(r.asset_id || "")}">Fetch back</button>`;
+    case "scan_watched":
+      return `<button class="small ghost" data-rec="scan-all">Scan folders</button>`;
+    case "delete_duplicate":
+    case "archive_stale":
+      return `<button class="small ghost" data-rec="review">Review &amp; act</button>`;
+    default:
+      return "";
+  }
+}
+
+// Offload the reusable pack to the first connected vendor (from the Scout plan
+// button). If nothing is connected yet, steer the user to connect one first.
+async function offloadReusableToBestVendor() {
+  let vendors = { vendors: [] };
+  try { vendors = await api("/api/cloud/vendors"); } catch { /* ignore */ }
+  const v = (vendors.vendors || [])[0];
+  if (!v) {
+    toast("Connect a free-tier vendor first, then offload.");
+    document.getElementById("vendor-kind").scrollIntoView({ behavior: "smooth", block: "center" });
+    document.getElementById("vendor-root").focus();
+    return;
+  }
+  toast(`Offloading reusable media to ${v.label || v.vendor}…`);
+  try {
+    const res = await api("/api/cloud/offload", {
+      method: "POST", body: JSON.stringify({ vendor_id: v.id }),
+    });
+    toast(`Offloaded ${res.copied || res.offloaded || 0} files to ${v.label || v.vendor}.`);
+    loadCloud(); loadLibrary(); loadStorage();
+  } catch (err) { toast(err.message, 5000); }
 }
 
 document.getElementById("vendor-form").onsubmit = async (e) => {
@@ -886,6 +957,51 @@ document.getElementById("storage-card").addEventListener("click", async (e) => {
   const t = e.target.closest("button");
   if (!t) return;
   try {
+    // Actionable recommendations (Scout's suggested next steps).
+    if (t.dataset.rec) {
+      const rec = t.dataset.rec;
+      if (rec === "connect_vendor") {
+        document.getElementById("vendor-root").focus();
+        toast("Pick a vendor and sync folder, then Connect.");
+      } else if (rec === "offload") {
+        toast("Offloading reusable media…");
+        const r = await api("/api/cloud/offload", {
+          method: "POST", body: JSON.stringify({ vendor_id: t.dataset.vendor }),
+        });
+        toast(`Offloaded ${r.copied || r.offloaded || 0} files.`);
+        loadCloud(); loadLibrary(); loadStorage();
+      } else if (rec === "organize") {
+        toast("Organizing captioned pack…");
+        const r = await api("/api/cloud/organize", {
+          method: "POST", body: JSON.stringify({ vendor_id: t.dataset.vendor }),
+        });
+        toast(`Organized ${r.copied || 0} files → ${r.dest || "vendor folder"}`);
+        loadCloud();
+      } else if (rec === "fetch") {
+        toast("Fetching offloaded asset back…");
+        const r = await api("/api/cloud/fetch", {
+          method: "POST", body: JSON.stringify({ asset_id: t.dataset.asset }),
+        });
+        toast(`Fetched → ${r.dest || "restored"}`);
+        loadCloud(); loadLibrary();
+      } else if (rec === "scan-all") {
+        toast("Scanning watched folders…");
+        let folders = { folders: [] };
+        try { folders = await api("/api/cloud/folders"); } catch { /* ignore */ }
+        let total = 0;
+        for (const f of folders.folders || []) {
+          try {
+            const r = await api(`/api/cloud/folders/${f.id}/scan`, { method: "POST" });
+            total += r.inserted || 0;
+          } catch { /* skip a bad folder */ }
+        }
+        toast(`Scan complete · ${total} new file(s) catalogued.`);
+        loadCloud(); loadLibrary();
+      } else if (rec === "review") {
+        document.getElementById("reclaim-card").scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      return;
+    }
     if (t.classList.contains("connect-vendor")) {
       document.getElementById("vendor-kind").value = t.dataset.vendor || "custom";
       document.getElementById("vendor-label").value = t.dataset.name || "";

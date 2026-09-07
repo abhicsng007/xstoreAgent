@@ -473,6 +473,24 @@ def library_overview(client: Client | None = None) -> list[dict[str, Any]]:
     return [dict(zip(result.column_names, row)) for row in result.result_rows]
 
 
+def reusable_footprint(client: Client | None = None) -> dict[str, Any]:
+    """Bytes/count of reusable, still-local assets — what the Scout can offload.
+
+    Reusable + not archived + not already living only in the cloud. This is the
+    concrete lever the Scout quotes when it proposes offloading to a free tier.
+    """
+    client = client or get_client()
+    result = client.query(
+        """
+        SELECT count() AS n, sum(size_bytes) AS bytes
+        FROM assets
+        WHERE reusable AND status != 'archived' AND location != 'cloud'
+        """
+    )
+    row = result.result_rows[0] if result.result_rows else (0, 0)
+    return {"count": int(row[0] or 0), "bytes": int(row[1] or 0)}
+
+
 def ping() -> bool:
     """True when ClickHouse accepts a trivial query."""
     get_client(database="default").command("SELECT 1")

@@ -124,19 +124,82 @@ def _grounded_search() -> tuple[list[dict], list[str]]:
 
 
 def storage_status() -> dict:
-    """Current library usage vs the plan cap, for the storage meter."""
+    """Current library usage vs the plan cap, for the storage meter.
+
+    Resilient: if the catalog is briefly unreachable the meter (and the Scout's
+    web search) degrade gracefully instead of crashing — `available` says which.
+    """
     s = get_settings()
-    overview = ch.library_overview()
-    used_bytes = sum(int(r.get("bytes", 0) or 0) for r in overview)
     plan_bytes = s.storage_plan_gb * _GB
+    try:
+        overview = ch.library_overview()
+        used_bytes = sum(int(r.get("bytes", 0) or 0) for r in overview)
+        available = True
+    except Exception:  # noqa: BLE001 — catalog offline; keep the feature usable
+        used_bytes = 0
+        available = False
     pct = round(used_bytes / plan_bytes * 100, 1) if plan_bytes else 0.0
+    over_bytes = max(used_bytes - plan_bytes, 0)
     return {
         "used_bytes": used_bytes,
         "plan_gb": s.storage_plan_gb,
         "used_pct": pct,
+        "over_bytes": over_bytes,
         "warn_pct": s.storage_warn_pct,
-        "over_threshold": pct >= s.storage_warn_pct,
+        "over_threshold": available and pct >= s.storage_warn_pct,
+        "available": available,
     }
+
+
+def _gb(nbytes: float) -> str:
+    """Human GB/TB label."""
+    gb = nbytes / _GB
+    return f"{gb / 1024:.2f} TB" if gb >= 1024 else f"{gb:.1f} GB"
+
+
+def _offload_plan(status: dict, provider: dict) -> dict:
+    """Tie the top web result back to the catalog: what offloading actually clears.
+
+    Reads the reusable, still-local footprint from ClickHouse and measures the
+    provider's free tier against the real overage — the Scout's concrete proposal.
+    """
+    try:
+        foot = ch.reusable_footprint()
+    except Exception:  # noqa: BLE001
+        foot = {"count": 0, "bytes": 0}
+    free_bytes = float(provider.get("free_gb") or 0) * _GB
+    movable = min(foot["bytes"], free_bytes) if free_bytes else foot["bytes"]
+    over = status.get("over_bytes", 0)
+    clears_pct = round(min(movable / over * 100, 100), 0) if over else 0
+    plan = {
+        "provider": provider.get("name", ""),
+        "free_gb": provider.get("free_gb", 0),
+        "reusable_count": foot["count"],
+        "reusable_bytes": foot["bytes"],
+        "movable_bytes": int(movable),
+        "over_bytes": int(over),
+        "clears_pct": clears_pct,
+    }
+    if not status.get("available"):
+        plan["headline"] = (
+            f"When the catalog is back, offload reusable media into "
+            f"{plan['provider']}'s {plan['free_gb']:.0f} GB free tier."
+        )
+    elif over > 0:
+        tail = (" Connect more free tiers to clear the rest."
+                if clears_pct < 100 else "")
+        plan["headline"] = (
+            f"Move ~{_gb(movable)} of your {_gb(foot['bytes'])} reusable pool "
+            f"({foot['count']} assets) into {plan['provider']}'s "
+            f"{plan['free_gb']:.0f} GB free tier — clears {clears_pct:.0f}% of your "
+            f"{_gb(over)} overage.{tail}"
+        )
+    else:
+        plan["headline"] = (
+            f"{_gb(foot['bytes'])} across {foot['count']} reusable assets could move "
+            f"to {plan['provider']} to stay ahead of the cap."
+        )
+    return plan
 
 
 def _step(status: str, title: str, detail: str = "", data: dict | None = None) -> dict:
@@ -149,13 +212,19 @@ def scout_storage_events() -> Iterator[dict]:
     """Stream the Scout's reasoning while it assesses storage and searches the web."""
     yield {"type": "start"}
     st = storage_status()
-    used_h = f"{st['used_bytes'] / _GB:.2f} GB of {st['plan_gb']:.0f} GB"
-    yield _step("done", f"Storage at {st['used_pct']}% of plan",
-                f"{used_h} used. "
-                + ("Approaching the cap — time to find more room."
-                   if st["over_threshold"]
-                   else "Planning ahead so the library never stalls."),
-                data=st)
+    plan_h = _gb(st["plan_gb"] * _GB)
+    if not st.get("available"):
+        yield _step("info", "Catalog usage unavailable",
+                    "Couldn't read the library right now — searching the web for "
+                    "free storage anyway so you have options ready.", data=st)
+    else:
+        used_h = f"{_gb(st['used_bytes'])} of {plan_h}"
+        yield _step("done", f"Storage at {st['used_pct']:.0f}% of plan",
+                    f"{used_h} used. "
+                    + ("Over the safety threshold — time to find more room."
+                       if st["over_threshold"]
+                       else "Planning ahead so the library never stalls."),
+                    data=st)
 
     yield _step("working", "Searching the web for free cloud storage",
                 "Running a live Google Search for providers with a free tier…")
@@ -184,7 +253,10 @@ def scout_storage_events() -> Iterator[dict]:
     yield _step("done", f"Recommendation: {top['name']} — {top['free_gb']:.0f} GB free",
                 f"{top['note']}", data={"pick": top})
 
-    yield {"type": "done", "status": st, "options": items,
+    plan = _offload_plan(st, top)
+    yield _step("done", "Offload plan ready", plan["headline"], data={"plan": plan})
+
+    yield {"type": "done", "status": st, "options": items, "plan": plan,
            "queries": queries, "grounded": bool(queries or (items and items[0].get("source") == "web"))}
 
 

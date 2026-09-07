@@ -271,6 +271,20 @@ button.danger { background: var(--danger); color: #2a0000; }
 }
 .provider .connect-vendor { margin-top: 8px; align-self: flex-start; }
 
+/* Scout's concrete offload plan — ties the web result to the ClickHouse footprint. */
+.offload-plan {
+  background: rgba(255,207,92,.07); border: 1px solid rgba(255,207,92,.35);
+  border-radius: 12px; padding: 14px 16px; margin-bottom: 4px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.offload-plan .plan-head {
+  font-size: 11px; font-weight: 700; letter-spacing: .4px;
+  text-transform: uppercase; color: var(--accent);
+}
+.offload-plan .plan-body { color: var(--text); font-size: 14px; line-height: 1.5; }
+.offload-plan button { align-self: flex-start; }
+.dup .actions [data-rec] { white-space: nowrap; }
+
 /* --- Librarian chat --- */
 .chat-log {
   display: flex; flex-direction: column; gap: 10px;

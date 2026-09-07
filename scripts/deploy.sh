@@ -77,6 +77,9 @@ ENV_VARS="${ENV_VARS},USE_CLICKHOUSE_MCP=true"
 # Multi-agent Librarian crew (root + Analyst/Archivist/Scout/Curator/Editor).
 ENV_VARS="${ENV_VARS},USE_MULTI_AGENT=${USE_MULTI_AGENT:-true}"
 ENV_VARS="${ENV_VARS},SAMPLE_ASSETS_DIR=/app/sample_assets"
+# Storage Scout: plan cap (GB) the usage meter measures against, and the warn %.
+ENV_VARS="${ENV_VARS},STORAGE_PLAN_GB=${STORAGE_PLAN_GB:-1024}"
+ENV_VARS="${ENV_VARS},STORAGE_WARN_PCT=${STORAGE_WARN_PCT:-80}"
 
 echo "==> Deploying to Cloud Run (this builds the container; ~3-5 min)..."
 gcloud run deploy "$SERVICE" \
