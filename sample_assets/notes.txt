@@ -1,1 +1,14 @@
-Shot list and licensing notes for the campaign.
+Shot list — Lumen Watch, 30s city product ad
+
+Beats: hook (aerial dusk) → establish (street / crowd) → product (watch macro)
+→ proof (cafe window) → CTA (logo). Music: 8s upbeat bed. SFX: whoosh.
+
+Reuse from this drive: city/neon/crowd/product/cafe B-roll, logo, whoosh, bed.
+Project-specific (do not reuse): scene 12 take 3 slate, rough_cut_v3, host VO.
+Leftover from other shoots (still reusable): forest still, sunset beach still.
+
+Media sources (royalty-free, commercial ok):
+- Mixkit Free License — mixkit.co  (default when no Pexels key)
+- Pexels License — pexels.com      (used when PEXELS_API_KEY is set)
+  Photos provided by Pexels: https://www.pexels.com
+Brand kit, clapper slate, rough cut, and host VO are generated locally.

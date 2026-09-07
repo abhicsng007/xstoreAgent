@@ -7,12 +7,11 @@ calls **mcp-clickhouse** (`list_tables` / `run_select_query`) with SQL on screen
 (2) the **Editor assembling a cut** — a storyboard built from the library.
 
 Before recording:
-1. `python scripts/make_sample_pack.py && python scripts/make_media_samples.py`
-2. Swap in 1–2 real B-roll clips over the synthetic ones for extra polish (optional).
-3. `python scripts/reset_library.py --yes --ingest sample_assets --project demo --seed 5000`
-4. Confirm `/api/health` → `mcp.ok` and `clickhouse.ok`
-5. Dry-run the golden prompt + an Assemble once so you know they land
-6. Record on the **hosted URL** (the URL judges will click)
+1. `python scripts/fetch_demo_pack.py` — real Mixkit/Pexels B-roll, 6s 720p (optional `PEXELS_API_KEY`).
+2. `python scripts/reset_library.py --yes --ingest sample_assets --project demo --seed 5000`
+3. Confirm `/api/health` → `mcp.ok` and `clickhouse.ok`
+4. Dry-run the golden prompt + an Assemble once so you know they land
+5. Record on the **hosted URL** (the URL judges will click)
 
 ---
 

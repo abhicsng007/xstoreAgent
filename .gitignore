@@ -26,6 +26,7 @@ Thumbs.db
 # Runtime / data
 sample_assets/**/*.mp4
 sample_assets/**/*.mov
+sample_assets/.cache/
 *.log
 .cache/
 organized/

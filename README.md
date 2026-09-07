@@ -79,9 +79,9 @@ Keep `USE_CLICKHOUSE_MCP=true` (the ClickHouse track default).
 
 ### 4. Run
 ```bash
-# Generate the sample pack: real images + real short clips (Gemini watches these).
-python scripts/make_sample_pack.py
-python scripts/make_media_samples.py
+# Real Mixkit (or Pexels) B-roll, trimmed to 6s 720p so Gemini ingest stays cheap.
+# Optional: set PEXELS_API_KEY (free at pexels.com/api) to prefer Pexels over Mixkit.
+python scripts/fetch_demo_pack.py
 uvicorn server.app:app --reload
 ```
 
@@ -118,6 +118,7 @@ Keep the ClickHouse Cloud service alive through judging (trial credits expire in
 | `server/app.py` | FastAPI: ingest, library, chat SSE, assemble SSE, health |
 | `web/` | Dashboard + multi-agent chat trace + storyboard |
 | `scripts/make_media_samples.py` | Generate real sample video/audio clips |
+| `scripts/fetch_demo_pack.py` | Pull a small Mixkit/Pexels pack and trim it for a cheap Gemini demo |
 | `scripts/seed_scale.py` | Seed thousands of realistic rows for scale analytics |
 | `demo/SCRIPT.md` | 3-minute demo storyboard |
 
