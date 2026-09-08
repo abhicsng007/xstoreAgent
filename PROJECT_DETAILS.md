@@ -8,7 +8,7 @@ Paste each section into the matching field on
 **Health:** https://xstoreagent-wgfn3j35ia-uc.a.run.app/api/health (`mcp.ok` + `clickhouse.ok`)  
 **Repo:** https://github.com/abhicsng007/xstoreAgent  
 **License:** MIT (file at repo root)  
-**Demo video:** `<paste public YouTube/Vimeo URL — running product, ≤3:00, English>`
+**Demo video:** https://youtu.be/GIq-hI5dIJc
 
 ---
 
