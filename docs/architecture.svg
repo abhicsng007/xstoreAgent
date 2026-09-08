@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 772" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" role="img" aria-label="xStoreAgent architecture: a browser talks to a FastAPI service on Google Cloud Run. An ingest pipeline uses Gemini and Vertex AI embeddings; a Google ADK multi-agent crew answers questions. The Analyst reads the catalog through the official mcp-clickhouse MCP server; dashboard and ingest writes use clickhouse-connect. All data lives in ClickHouse Cloud.">
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 z" fill="#57606a"/>
+    </marker>
+    <marker id="arrowStart" markerWidth="9" markerHeight="9" refX="1.5" refY="4.5" orient="auto">
+      <path d="M9,0 L0,4.5 L9,9 z" fill="#57606a"/>
+    </marker>
+  </defs>
+
+  <!-- card background -->
+  <rect x="1" y="1" width="1098" height="770" rx="16" fill="#ffffff" stroke="#d0d7de"/>
+
+  <!-- title -->
+  <text x="32" y="40" font-size="22" font-weight="700" fill="#1F2328">xStoreAgent — System Architecture</text>
+  <text x="32" y="62" font-size="13" fill="#57606a">Gemini + Google ADK on Google Cloud Run · ClickHouse Cloud accessed through the official mcp-clickhouse server</text>
+
+  <!-- legend -->
+  <circle cx="712" cy="34" r="6" fill="#4285F4"/>
+  <text x="724" y="39" font-size="12.5" fill="#1F2328">Google Cloud &amp; AI</text>
+  <circle cx="862" cy="34" r="6" fill="#F2B705"/>
+  <text x="874" y="39" font-size="12.5" fill="#1F2328">ClickHouse</text>
+  <circle cx="978" cy="34" r="6" fill="#6E7781"/>
+  <text x="990" y="39" font-size="12.5" fill="#1F2328">App code</text>
+
+  <!-- Browser -->
+  <rect x="40" y="90" width="1020" height="52" rx="10" fill="#F0F3F6" stroke="#6E7781"/>
+  <text x="550" y="121" text-anchor="middle" font-size="14" font-weight="600" fill="#1F2328">Browser — Web UI · single-page dashboard · live SSE reasoning traces</text>
+
+  <!-- Browser <-> Cloud Run -->
+  <line x1="550" y1="142" x2="550" y2="169" stroke="#57606a" stroke-width="1.6" marker-start="url(#arrowStart)" marker-end="url(#arrow)"/>
+  <text x="560" y="160" font-size="11" fill="#57606a">REST + SSE</text>
+
+  <!-- Cloud Run band -->
+  <rect x="40" y="170" width="1020" height="200" rx="12" fill="#F7FAFF" stroke="#4285F4"/>
+  <rect x="52" y="182" width="270" height="26" rx="7" fill="#4285F4"/>
+  <text x="187" y="200" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">Google Cloud Run — FastAPI service</text>
+
+  <!-- Ingest pipeline -->
+  <rect x="60" y="222" width="300" height="132" rx="10" fill="#F0F3F6" stroke="#6E7781"/>
+  <text x="210" y="248" text-anchor="middle" font-size="14" font-weight="700" fill="#1F2328">Ingest pipeline</text>
+  <text x="210" y="273" text-anchor="middle" font-size="11.5" fill="#1F2328">scan · classify by asset type</text>
+  <text x="210" y="293" text-anchor="middle" font-size="11.5" fill="#1F2328">→ Gemini caption + reuse verdict</text>
+  <text x="210" y="313" text-anchor="middle" font-size="11.5" fill="#1F2328">→ embed · store</text>
+  <text x="210" y="335" text-anchor="middle" font-size="10.5" fill="#57606a">sha256 skip · .xstore.json sidecars</text>
+
+  <!-- ADK crew -->
+  <rect x="390" y="222" width="530" height="132" rx="10" fill="#E8F0FE" stroke="#4285F4"/>
+  <text x="655" y="243" text-anchor="middle" font-size="13" font-weight="700" fill="#1F2328">Google ADK — Librarian crew (multi-agent · sub_agents)</text>
+  <!-- chips row 1 -->
+  <rect x="402" y="256" width="160" height="34" rx="7" fill="#ffffff" stroke="#4285F4"/>
+  <text x="482" y="278" text-anchor="middle" font-size="11.5" fill="#1F2328">Librarian (root)</text>
+  <rect x="574" y="256" width="160" height="34" rx="7" fill="#ffffff" stroke="#4285F4"/>
+  <text x="654" y="278" text-anchor="middle" font-size="11.5" fill="#1F2328">Analyst → MCP</text>
+  <rect x="746" y="256" width="160" height="34" rx="7" fill="#ffffff" stroke="#4285F4"/>
+  <text x="826" y="278" text-anchor="middle" font-size="11.5" fill="#1F2328">Archivist</text>
+  <!-- chips row 2 -->
+  <rect x="402" y="300" width="160" height="34" rx="7" fill="#ffffff" stroke="#4285F4"/>
+  <text x="482" y="322" text-anchor="middle" font-size="11.5" fill="#1F2328">Scout → Search</text>
+  <rect x="574" y="300" width="160" height="34" rx="7" fill="#ffffff" stroke="#4285F4"/>
+  <text x="654" y="322" text-anchor="middle" font-size="11.5" fill="#1F2328">Curator</text>
+  <rect x="746" y="300" width="160" height="34" rx="7" fill="#ffffff" stroke="#4285F4"/>
+  <text x="826" y="322" text-anchor="middle" font-size="11.5" fill="#1F2328">Editor → cut</text>
+
+  <!-- arrows from band to services -->
+  <line x1="210" y1="354" x2="210" y2="399" stroke="#57606a" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="218" y="381" font-size="10.5" fill="#57606a">watch · listen · embed</text>
+
+  <!-- Scout -> Google Search -->
+  <line x1="500" y1="334" x2="838" y2="399" stroke="#57606a" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="612" y="360" font-size="10.5" fill="#57606a">grounded web search</text>
+
+  <!-- Analyst -> mcp-clickhouse (far-right routed) -->
+  <polyline points="920,290 1035,290 1035,528 1002,528" fill="none" stroke="#57606a" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="1043" y="410" transform="rotate(90 1043 410)" text-anchor="middle" font-size="10.5" fill="#57606a">agent reads · MCP</text>
+
+  <!-- Tier C: Google AI services -->
+  <rect x="60" y="400" width="300" height="64" rx="10" fill="#E8F0FE" stroke="#4285F4"/>
+  <text x="210" y="425" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1F2328">Gemini · gemini-3.7-flash</text>
+  <text x="210" y="446" text-anchor="middle" font-size="10.5" fill="#3c4043">caption · reuse verdict · crew reasoning</text>
+
+  <rect x="380" y="400" width="300" height="64" rx="10" fill="#E8F0FE" stroke="#4285F4"/>
+  <text x="530" y="422" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1F2328">Vertex AI — Embeddings</text>
+  <text x="530" y="440" text-anchor="middle" font-size="10" fill="#3c4043">gemini-embedding-001 (3072-d, search)</text>
+  <text x="530" y="456" text-anchor="middle" font-size="10" fill="#3c4043">multimodalembedding@001 (visual dedup)</text>
+
+  <rect x="700" y="400" width="300" height="64" rx="10" fill="#E8F0FE" stroke="#4285F4"/>
+  <text x="850" y="425" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1F2328">Google Search (grounding)</text>
+  <text x="850" y="446" text-anchor="middle" font-size="10.5" fill="#3c4043">Scout: free-tier cloud storage</text>
+
+  <!-- Vertex/ingest -> clickhouse-connect -->
+  <line x1="470" y1="464" x2="360" y2="499" stroke="#57606a" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="300" y="486" font-size="10.5" fill="#57606a">writes</text>
+
+  <!-- Tier D: access clients -->
+  <rect x="60" y="500" width="560" height="56" rx="10" fill="#FFF8E1" stroke="#F2B705"/>
+  <text x="340" y="523" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1F2328">clickhouse-connect (Python client)</text>
+  <text x="340" y="543" text-anchor="middle" font-size="10.5" fill="#3c4043">dashboard reads + ingest / archive WRITES</text>
+
+  <rect x="640" y="500" width="360" height="56" rx="10" fill="#FFF8E1" stroke="#F2B705"/>
+  <text x="820" y="521" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1F2328">mcp-clickhouse — official MCP server</text>
+  <text x="820" y="540" text-anchor="middle" font-size="10" fill="#3c4043">agent READ path · list_tables · run_select_query</text>
+
+  <!-- access -> ClickHouse Cloud -->
+  <line x1="340" y1="556" x2="340" y2="599" stroke="#57606a" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="820" y1="556" x2="820" y2="599" stroke="#57606a" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- Tier E: ClickHouse Cloud -->
+  <rect x="40" y="600" width="1020" height="150" rx="12" fill="#FFF8E1" stroke="#F2B705" stroke-width="1.6"/>
+  <circle cx="72" cy="628" r="7" fill="#F2B705"/>
+  <text x="88" y="633" font-size="16" font-weight="700" fill="#1F2328">ClickHouse Cloud</text>
+  <text x="270" y="633" font-size="11.5" fill="#57606a">catalog memory — MergeTree tables</text>
+
+  <!-- table chips -->
+  <g font-size="11.5" fill="#1F2328">
+    <rect x="64" y="654" width="150" height="34" rx="7" fill="#ffffff" stroke="#F2B705"/>
+    <text x="139" y="676" text-anchor="middle">assets</text>
+    <rect x="224" y="654" width="150" height="34" rx="7" fill="#ffffff" stroke="#F2B705"/>
+    <text x="299" y="676" text-anchor="middle">asset_events</text>
+    <rect x="384" y="654" width="150" height="34" rx="7" fill="#ffffff" stroke="#F2B705"/>
+    <text x="459" y="676" text-anchor="middle">brief_queries</text>
+    <rect x="544" y="654" width="150" height="34" rx="7" fill="#ffffff" stroke="#F2B705"/>
+    <text x="619" y="676" text-anchor="middle">cloud_vendors</text>
+    <rect x="704" y="654" width="150" height="34" rx="7" fill="#ffffff" stroke="#F2B705"/>
+    <text x="779" y="676" text-anchor="middle">watched_folders</text>
+    <rect x="864" y="654" width="150" height="34" rx="7" fill="#ffffff" stroke="#F2B705"/>
+    <text x="939" y="676" text-anchor="middle">asset_locations</text>
+  </g>
+  <text x="550" y="720" text-anchor="middle" font-size="11" fill="#57606a">Agent catalog reads → mcp-clickhouse (official MCP, read-only)   ·   Dashboard + ingest / archive writes → clickhouse-connect</text>
+</svg>
