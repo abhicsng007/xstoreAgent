@@ -29,6 +29,7 @@ from agent.librarian import (
     library_stats,
     list_duplicates,
     surface_repurposable,
+    surface_repurposable_events,
 )
 from agent.reusability import REUSABLE_BAND, reusability_score
 from agent.tools.assemble import assemble_sequence, assemble_sequence_events
@@ -482,11 +483,30 @@ def api_search(req: SearchRequest) -> dict:
     results = surface_repurposable(req.brief, limit=req.limit)
     for r in results:
         attach_preview(r)
-    try:
-        ch.insert_events([{"event": "searched", "detail": req.brief[:300]}])
-    except Exception as exc:  # noqa: BLE001
-        print(f"[search] event skipped: {exc}")
     return {"brief": req.brief, "results": results}
+
+
+@app.post("/api/search/stream")
+def api_search_stream(req: SearchRequest):
+    """SSE: Analyst embeds the brief + queries ClickHouse; Curator explains reuse."""
+    if not req.brief.strip():
+        raise HTTPException(400, "brief required")
+
+    def event_stream():
+        try:
+            for ev in surface_repurposable_events(req.brief.strip(), limit=req.limit):
+                if ev.get("type") == "done":
+                    for r in ev.get("results") or []:
+                        attach_preview(r)
+                yield _sse(ev)
+        except Exception as exc:
+            yield _sse({"type": "error", "message": str(exc)[:300]})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # --- Assemble a cut (cinema-creative) ---

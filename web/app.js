@@ -328,19 +328,74 @@ document.getElementById("sort-toggle").addEventListener("click", (e) => {
 });
 
 // --- Repurpose search ---
-document.getElementById("search-form").onsubmit = async (e) => {
+const SEARCH_CREW = [["Analyst", "🔎"], ["Curator", "🎬"]];
+
+function paintSearchCrew(active, state) {
+  const el = document.getElementById("search-crew");
+  el.innerHTML = SEARCH_CREW.map(([name, ava]) => {
+    const st = state[name] || "";
+    const cls = name === active ? "active" : st;
+    const tick = st === "done" ? "✓" : (name === active ? "▸" : "");
+    return `<div class="member ${cls}">
+        <span class="ava">${ava}</span><span class="nm">${name}</span>
+        <span class="tick">${tick}</span>
+      </div>`;
+  }).join("");
+}
+
+async function runSearch(brief) {
+  const box = document.getElementById("search-results");
+  const trace = document.getElementById("search-trace");
+  const btn = document.querySelector("#search-form button");
+  document.getElementById("search-brief").value = brief;
+  trace.innerHTML = "";
+  box.innerHTML = "";
+  const state = {};
+  paintSearchCrew("Analyst", state);
+  btn.disabled = true;
+  try {
+    const res = await fetch(API + "/api/search/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ brief, limit: 12 }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || res.statusText);
+    }
+    await readSSE(res, (ev) => {
+      if (ev.type === "step") {
+        if (ev.status === "done") state[ev.agent] = "done";
+        paintSearchCrew(ev.status === "working" ? ev.agent : null, state);
+        reasoningStep(ev, trace);
+        return;
+      }
+      if (ev.type === "done") {
+        SEARCH_CREW.forEach(([n]) => { state[n] = "done"; });
+        paintSearchCrew(null, state);
+        const results = ev.results || [];
+        box.innerHTML = results.map((a) => assetCard(a, { showScore: true })).join("")
+          || `<div class="empty">No matching assets found. Try ingesting more, or a different brief.</div>`;
+        return;
+      }
+      if (ev.type === "error") {
+        reasoningStep({
+          agent: "Analyst", icon: "⚠️", status: "error",
+          title: "Search failed", detail: ev.message || "",
+        }, trace);
+      }
+    });
+  } catch (err) {
+    box.innerHTML = `<div class="empty">Search failed: ${escapeHtml(err.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById("search-form").onsubmit = (e) => {
   e.preventDefault();
   const brief = document.getElementById("search-brief").value.trim();
-  if (!brief) return;
-  const box = document.getElementById("search-results");
-  box.innerHTML = `<div class="spin">Searching the library…</div>`;
-  try {
-    const { results } = await api("/api/search", {
-      method: "POST", body: JSON.stringify({ brief, limit: 12 }),
-    });
-    box.innerHTML = results.map((a) => assetCard(a, { showScore: true })).join("")
-      || `<div class="empty">No matching assets found. Try ingesting more, or a different brief.</div>`;
-  } catch (err) { box.innerHTML = `<div class="empty">Search failed: ${err.message}</div>`; }
+  if (brief) runSearch(brief);
 };
 
 // --- Ingest with live multi-agent reasoning ---
@@ -363,8 +418,8 @@ function renderCrew(activeName) {
   }).join("");
 }
 
-function reasoningStep(ev) {
-  const log = document.getElementById("reasoning-log");
+function reasoningStep(ev, logEl) {
+  const log = logEl || document.getElementById("reasoning-log");
   const row = document.createElement("div");
   row.className = `rstep ${ev.status || "info"}`;
   row.innerHTML = `

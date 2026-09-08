@@ -384,6 +384,9 @@ button.golden {
 .card.assemble { background: linear-gradient(180deg, #16121f, var(--panel)); }
 #assemble-trace:empty { display: none; }
 #assemble-trace { margin: 10px 0; }
+#search-trace:empty { display: none; }
+#search-trace { margin: 10px 0; max-height: 280px; }
+#search-crew:empty { display: none; }
 .storyboard:empty { display: none; }
 .seq-head { margin: 8px 0 12px; }
 .seq-title { font-size: 18px; font-weight: 800; color: var(--accent); }

@@ -56,12 +56,14 @@
   <!-- Repurpose search -->
   <section class="card">
     <h2>Start a new project</h2>
-    <p class="muted">Describe what you're making — the dashboard ranks reusable assets by caption embedding in ClickHouse. For the agentic path, use the Librarian above.</p>
+    <p class="muted">Describe what you're making. The <b>Analyst</b> embeds the brief and ranks the catalog in ClickHouse; the <b>Curator</b> explains why each hit is reusable. Watch the live trace below.</p>
     <form id="search-form" class="search">
       <input id="search-brief" type="text"
         placeholder="e.g. upbeat 30s product ad — city b-roll, brand logo, energetic music bed" />
       <button type="submit">Surface reusable assets</button>
     </form>
+    <div id="search-crew" class="crew"></div>
+    <div id="search-trace" class="reasoning-log"></div>
     <div id="search-results" class="results-grid"></div>
   </section>
 

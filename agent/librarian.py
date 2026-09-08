@@ -6,6 +6,8 @@ on the live path. Run interactively with `adk web` (repo root) or via `/api/chat
 """
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from . import clickhouse_client as ch
 from .clickhouse_mcp import build_clickhouse_mcp_toolset
 from .config import get_settings
@@ -70,13 +72,84 @@ def archive_asset(asset_id: str) -> dict:
 
 def surface_repurposable(brief: str, limit: int = 12) -> list[dict]:
     """Dashboard helper (not an agent tool): rank assets by caption embedding."""
+    results: list[dict] = []
+    for ev in surface_repurposable_events(brief, limit=limit):
+        if ev.get("type") == "done":
+            results = ev.get("results") or []
+    return results
+
+
+def surface_repurposable_events(brief: str, limit: int = 12) -> Iterator[dict]:
+    """Stream Analyst + Curator reasoning for brief → reusable-asset search."""
+    analyst, a_icon = ("Analyst", "🔎")
+    curator, c_icon = ("Curator", "🎬")
+
+    def step(agent: str, icon: str, status: str, title: str,
+             detail: str = "", data: dict | None = None) -> dict:
+        return {
+            "type": "step", "agent": agent, "icon": icon, "status": status,
+            "title": title, "detail": detail, "data": data or {},
+        }
+
+    yield {"type": "start", "brief": brief}
+    yield step(analyst, a_icon, "working", "Embedding the brief",
+               f"Projecting “{brief[:80]}” into the caption vector space…")
     vec = embed_text(brief)
     if not vec:
-        return []
-    results = ch.repurpose_search(vec, limit=limit)
-    for r in results:
+        yield step(analyst, a_icon, "error", "Brief embedding failed",
+                   "gemini-embedding-001 returned an empty vector.")
+        yield {"type": "done", "results": [], "brief": brief}
+        return
+    try:
+        ch.insert_brief(brief, vec)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[search] brief_queries skipped: {exc}")
+    db = get_settings().ch_database
+    sql = (
+        f"WITH q AS (SELECT embedding FROM {db}.brief_queries ORDER BY ts DESC LIMIT 1) "
+        f"SELECT filename, asset_type, caption, cosineDistance(a.embedding, q.embedding) AS dist "
+        f"FROM {db}.assets AS a, q "
+        f"WHERE status != 'archived' AND length(a.embedding) > 0 "
+        f"ORDER BY dist ASC LIMIT {int(limit)}"
+    )
+    yield step(analyst, a_icon, "done", f"Brief vector ready ({len(vec)}-d)",
+               "Stored in brief_queries so ClickHouse can JOIN — no giant SQL literal.",
+               data={"dim": len(vec)})
+
+    yield step(analyst, a_icon, "working", "Querying ClickHouse",
+               "cosineDistance(asset.embedding, brief.embedding) over reusable captions…")
+    raw = ch.repurpose_search(vec, limit=limit)
+    results: list[dict] = []
+    for r in raw:
+        r["id"] = str(r.get("id", ""))
         r["match_score"] = round(max(0.0, 1.0 - float(r.get("distance", 1.0))) * 100)
-    return results
+        cap = (r.get("caption") or r.get("filename") or "").strip()
+        kind = "reusable" if r.get("reusable") else "project-specific"
+        r["why"] = f"{r['match_score']}% caption match · {kind}: {cap}"
+        results.append(r)
+    top = ", ".join(f"{r.get('filename')} ({r['match_score']}%)" for r in results[:4])
+    yield step(analyst, a_icon, "done",
+               f"Ranked {len(results)} assets",
+               (top or "No caption vectors in the library yet.") + f"\n{sql}",
+               data={"count": len(results), "sql": sql})
+
+    yield step(curator, c_icon, "working", "Judging reuse for this brief",
+               "Why each match belongs in the next cut — caption, not filename.")
+    reusable_n = sum(1 for r in results if r.get("reusable"))
+    for r in results[:8]:
+        yield step(curator, c_icon, "done",
+                   f"{r.get('filename')} → {r['match_score']}%",
+                   r.get("why", ""),
+                   data={"filename": r.get("filename"), "score": r["match_score"]})
+    yield step(curator, c_icon, "done",
+               f"{reusable_n} reusable of {len(results)} surfaced",
+               "Evergreen B-roll / brand / SFX float above project-specific takes.",
+               data={"reusable": reusable_n})
+    try:
+        ch.insert_events([{"event": "searched", "detail": brief[:300]}])
+    except Exception as exc:  # noqa: BLE001
+        print(f"[search] event skipped: {exc}")
+    yield {"type": "done", "brief": brief, "results": results, "sql": sql}
 
 
 def list_duplicates() -> list[dict]:
