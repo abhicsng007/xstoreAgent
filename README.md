@@ -191,7 +191,6 @@ so impact numbers are computed at scale. Full walkthrough in [`DEPLOY.md`](DEPLO
 | `web/` | Single-page dashboard |
 | `scripts/deploy.sh` | One-command Cloud Run deploy |
 | `scripts/seed_scale.py` | Bulk analytics rows for production-scale impact numbers |
-| `demo/SCRIPT.md` | 3-minute demo walkthrough (teleprompter + shot list) |
 
 ---
 
